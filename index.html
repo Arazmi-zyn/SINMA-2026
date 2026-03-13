@@ -21,10 +21,17 @@
     });
   }
 </script>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"></noscript>
+<style>
+.animate__animated{animation-duration:.5s;animation-fill-mode:both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInUp{from{opacity:0;transform:translate3d(0,24px,0)}to{opacity:1;transform:none}}
+.animate__fadeIn{animation-name:fadeIn}
+.animate__fadeInUp{animation-name:fadeInUp}
+</style>
+
 <style>
 /* ===== THEME VARIABLES ===== */
 :root {
@@ -44,7 +51,7 @@
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Plus Jakarta Sans',sans-serif}
 body{background:var(--grad);color:var(--ft);min-height:100vh;overflow-x:hidden;transition:background .3s,color .3s}
 .hidden{display:none!important}
-.glass{background:var(--gb);backdrop-filter:blur(14px);border:1px solid var(--gbr);border-radius:16px;box-shadow:var(--gsh);transition:background .3s,border .3s}
+.glass{background:var(--gb);border:1px solid var(--gbr);border-radius:16px;box-shadow:var(--gsh);transition:background .3s,border .3s}
 .flex{display:flex}.aic{align-items:center}.jb{justify-content:space-between}.wrap{flex-wrap:wrap}
 .p6{padding:1.5rem}.mb4{margin-bottom:1rem}.mb6{margin-bottom:1.5rem}.mt4{margin-top:1rem}.tc{text-align:center}
 
@@ -103,7 +110,7 @@ table{width:100%;border-collapse:collapse}
 th,td{padding:.8rem .95rem;text-align:left;border-bottom:1px solid var(--gbr);font-size:.82rem;vertical-align:middle}
 th{color:var(--mt);text-transform:uppercase;letter-spacing:.05em;font-size:.68rem;background:rgba(0,0,0,.16);white-space:nowrap}
 tr:hover td{background:rgba(255,255,255,.025)}
-.mo{position:fixed;inset:0;background:rgba(0,0,0,.84);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:.22s}
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.84);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:.22s}
 .mo.active{opacity:1;pointer-events:auto}
 .mb{width:100%;max-height:93vh;overflow-y:auto;margin:1rem}
 .badge{padding:3px 8px;border-radius:6px;font-weight:700;font-size:.68rem;display:inline-block;white-space:nowrap}
@@ -4035,7 +4042,18 @@ function genPrint() {
   document.getElementById('pa').innerHTML=html;
   document.getElementById('paWrap').classList.remove('hidden');
 }
+function loadXLSX(cb){
+  if(typeof XLSX!=='undefined'){cb();return;}
+  var s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  s.onload=function(){cb();};
+  s.onerror=function(){toast('Gagal memuat library Excel. Cek koneksi internet.','e');};
+  document.head.appendChild(s);
+}
 function exportExcel() {
+  loadXLSX(function(){_doExportExcel();});
+}
+function _doExportExcel() {
   if(typeof XLSX==='undefined'){toast('Library XLSX tidak tersedia','e');return;}
   var klId=document.getElementById('cetKelas').value; var mpId=document.getElementById('cetMapel').value;
   var sem=document.getElementById('cetSem').value; var tahun=document.getElementById('cetTahun').value;
@@ -4349,15 +4367,17 @@ function processImpFile(file) {
   var ext=file.name.split('.').pop().toLowerCase();
   if(['xlsx','xls','csv'].indexOf(ext)<0){toast('Format tidak didukung. Gunakan .xlsx/.xls/.csv','e');return;}
   if(file.size>5*1024*1024){toast('File terlalu besar! Maks 5 MB','e');return;}
-  var reader=new FileReader();
-  reader.onload=function(ev){
-    var data=ev.target.result; var rows=[];
-    if(ext==='csv'){ var text=typeof data==='string'?data:new TextDecoder().decode(data); rows=parseCSV(text); }
-    else{ if(typeof XLSX==='undefined'){toast('Library XLSX belum termuat!','e');return;} var wb=XLSX.read(data,{type:'array'}); var ws=wb.Sheets[wb.SheetNames[0]]; rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''}); }
-    if(!rows||rows.length<2){toast('File kosong atau format tidak valid!','e');return;}
-    validateAndPreview(rows);
-  };
-  if(ext==='csv') reader.readAsText(file,'UTF-8'); else reader.readAsArrayBuffer(file);
+  if(ext==='csv'){
+    var rdr=new FileReader();
+    rdr.onload=function(ev){var rows=parseCSV(ev.target.result);if(!rows||rows.length<2){toast('File kosong!','e');return;}validateAndPreview(rows);};
+    rdr.readAsText(file,'UTF-8');
+  } else {
+    loadXLSX(function(){
+      var rdr2=new FileReader();
+      rdr2.onload=function(ev){var wb=XLSX.read(ev.target.result,{type:'array'});var ws=wb.Sheets[wb.SheetNames[0]];var rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});if(!rows||rows.length<2){toast('File kosong!','e');return;}validateAndPreview(rows);};
+      rdr2.readAsArrayBuffer(file);
+    });
+  }
 }
 function parseCSV(text) {
   var lines=text.split(/\r?\n/).filter(function(l){return l.trim();});
@@ -4427,6 +4447,9 @@ function confirmImport() {
 // DOWNLOAD TEMPLATE
 // =====================================================================
 function dlTemplate(type) {
+  loadXLSX(function(){ _doDlTemplate(type); });
+}
+function _doDlTemplate(type) {
   if(typeof XLSX==='undefined'){toast('Library XLSX belum termuat','e');return;}
   var wb=XLSX.utils.book_new();
   if(type==='siswa'){
