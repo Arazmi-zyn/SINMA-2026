@@ -2,7 +2,7 @@
   "name": "SISKA 2026",
   "short_name": "SISKA",
   "description": "Sistem Informasi Akademik & Tugas",
-  "start_url": "./index_pwa.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
