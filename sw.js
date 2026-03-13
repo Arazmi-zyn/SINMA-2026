@@ -1,5 +1,5 @@
-// SISKA 2026 - Service Worker
-var CACHE_NAME = 'siska-v3';
+// SINMA 2026 - Service Worker
+var CACHE_NAME = 'sinma-v1';
 var STATIC_ASSETS = [
   './index.html',
   './app.js',
