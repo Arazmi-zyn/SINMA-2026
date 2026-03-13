@@ -1,7 +1,8 @@
 // SISKA 2026 - Service Worker
-var CACHE_NAME = 'siska-v2';
+var CACHE_NAME = 'siska-v3';
 var STATIC_ASSETS = [
   './index.html',
+  './app.js',
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
 ];
