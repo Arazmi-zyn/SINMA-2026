@@ -2120,7 +2120,7 @@ var GAS_URL = 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOj
 function callGAS(fnName, params, onSuccess, onFailure) {
   var url = GAS_URL + '?fn=' + encodeURIComponent(fnName);
   if (params !== undefined && params !== null) {
-    url += '&p=' + encodeURIComponent(JSON.stringify(params));
+    url += '&params=' + encodeURIComponent(JSON.stringify(params));
   }
   fetch(url, { method: 'GET', mode: 'cors' })
     .then(function(resp) { return resp.json(); })
