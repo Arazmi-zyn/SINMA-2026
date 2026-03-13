@@ -1,7 +1,7 @@
 // SISKA 2026 - Service Worker
 var CACHE_NAME = 'siska-v1';
 var STATIC_ASSETS = [
-  './index_pwa.html',
+  './index.html',
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css',
@@ -51,7 +51,7 @@ self.addEventListener('fetch', function(event) {
         return response;
       }).catch(function() {
         // Offline fallback
-        return caches.match('./index_pwa.html');
+        return caches.match('./index.html');
       });
     })
   );
