@@ -2156,7 +2156,7 @@ window.onload = function() {
   } catch(e) {}
 
   // Cek apakah berjalan di GAS atau tidak
-  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     // Mode offline / dev lokal
     setLoad(100, 'Mode Offline');
     setStep(1, 'error');
@@ -2289,7 +2289,7 @@ function saveLocal() {
 }
 
 function syncServer() {
-  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') return;
+  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
   callGASPost('syncData', { data:D, cfg:CFG }, function() {}, function(e) { console.warn('syncServer failed:', e); });
 }
 
@@ -2347,7 +2347,7 @@ function doLogin(e) {
   setLoginLoading(true);
 
   // Coba login ke server dulu, fallback ke lokal
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     callGAS('login', [u, p], function(r) {
         setLoginLoading(false);
         if (r && r.success) {
@@ -2462,7 +2462,7 @@ function doBackup() {
     toast('Backup berhasil diunduh','s');
   }
 
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     // Ambil data terbaru dari server (termasuk foto yang mungkin belum tersync)
     callGAS('backupData', null, function(r) {
         if(r && r.success) {
@@ -2550,7 +2550,7 @@ function doRestore() {
     }
   }
 
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     callGASPost('restoreData', JSON.stringify(_restorePayload), function(r){ _afterRestore(r&&r.success, r&&r.message); }, function(e){ _afterRestore(false, String(e)); });
   } else {
     setTimeout(function(){ _afterRestore(true); }, 500);
@@ -2581,7 +2581,7 @@ function konfirmasiHapus(target, label) {
     }
   }
 
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     callGAS('clearData', [target], function(r){ _afterHapus(r&&r.success, r&&r.message); }, function(e){ _afterHapus(false, String(e)); });
   } else {
     setTimeout(function(){ _afterHapus(true); }, 300);
@@ -2653,7 +2653,7 @@ function _saveFotoToServer(userId, b64, onDone) {
   if(idx>=0) D.users[idx].foto = b64;
   if(ME && ME.id===userId) ME.foto = b64;
   saveLocal();
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     callGASPost('saveProfilePhoto', {userId: userId, b64: b64}, function(r){ if(onDone) onDone(r && r.success); }, function(){ if(onDone) onDone(false); });
   } else {
     if(onDone) onDone(true);
@@ -2666,7 +2666,7 @@ function _removeFotoFromServer(userId, onDone) {
   if(idx>=0) D.users[idx].foto = '';
   if(ME && ME.id===userId) ME.foto = '';
   saveLocal();
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec') {
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     callGAS('removeProfilePhoto', [userId], function(){ if(onDone) onDone(); }, function(){ if(onDone) onDone(); });
   } else {
     if(onDone) onDone();
@@ -4292,7 +4292,7 @@ function doKumpul(e) {
   var reader=new FileReader();
   reader.onload=function(ev){
     var b64=ev.target.result; subObj.fileDataUrl=b64; subObj.fileName=file.name;
-    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec'){
+    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec'){
       callGASPost('uploadFileToDrive', {base64Data:b64, fileName:file.name, mimeType:file.type}, function(res){
           btn.disabled=false; document.getElementById('kpUploadInfo').classList.add('hidden');
           if(res&&res.success){subObj.fileId=res.fileId;subObj.fileViewUrl=res.viewUrl;subObj.fileDlUrl=res.dlUrl;}
