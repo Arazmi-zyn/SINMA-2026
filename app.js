@@ -2,7 +2,7 @@
 // STATE
 // =====================================================================
 var D = { users:[], classes:[], subjects:[], grades:[], tasks:[], submissions:[], teacherSubjects:[], journals:[], absences:[], ekskuls:[], ekskulMembers:[], ekskulAbsences:[], ekskulGrades:[], exams:[], examResults:[], bankSoal:[], tabunganTx:[] };
-var CFG = { appName:'SISKA 2026', schoolName:'SMA Negeri Unggulan', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
+var CFG = { appName:'SINMA 2026', schoolName:'SMA Negeri Unggulan', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
 var ME = null;
 var _appInit = false;
 var _showPass = false;
@@ -133,7 +133,7 @@ function loadXLSX(cb){
 // ===== MAIN INIT — pakai DOMContentLoaded, JAUH lebih cepat dari window.onload =====
 document.addEventListener('DOMContentLoaded', function() {
   // Terapkan tema sebelum apapun render (cegah flash)
-  (function(){var t=localStorage.getItem('siska_theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');})();
+  (function(){var t=localStorage.getItem('sinma_theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');})();
 
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
@@ -141,14 +141,14 @@ document.addEventListener('DOMContentLoaded', function() {
   // Muat data lokal (instant)
   setLoad(10, 'Memuat data lokal...');
   try {
-    var ld = localStorage.getItem('siskaData');
-    var lc = localStorage.getItem('siskaCfg');
+    var ld = localStorage.getItem('sinmaData');
+    var lc = localStorage.getItem('sinmaCfg');
     if (ld) D = JSON.parse(ld);
     if (lc) CFG = JSON.parse(lc);
   } catch(e) {}
 
   // Kalau sudah ada data lokal → tampilkan login SEKARANG, sync GAS di background
-  var hasLocal = !!(localStorage.getItem('siskaData'));
+  var hasLocal = !!(localStorage.getItem('sinmaData'));
 
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     setLoad(100, 'Mode Offline');
@@ -231,7 +231,7 @@ function initApp() {
 // CONFIG
 // =====================================================================
 function applyCFG() {
-  var n = CFG.appName || 'SISKA 2026';
+  var n = CFG.appName || 'SINMA 2026';
   var s = CFG.schoolName || 'SMA Negeri Unggulan';
   ['dAppName','sbApp','sbAppMob','grSbApp','grSbAppMob'].forEach(function(id) { var el = document.getElementById(id); if(el) el.textContent = n; });
   ['dSchool','schDisp','grSchDisp'].forEach(function(id) { var el = document.getElementById(id); if(el) el.textContent = s; });
@@ -249,8 +249,8 @@ function applyCFG() {
 
 function saveLocal() {
   try {
-    localStorage.setItem('siskaData', JSON.stringify(D));
-    localStorage.setItem('siskaCfg', JSON.stringify(CFG));
+    localStorage.setItem('sinmaData', JSON.stringify(D));
+    localStorage.setItem('sinmaCfg', JSON.stringify(CFG));
   } catch(e) {}
 }
 
@@ -368,7 +368,7 @@ function afterLogin() {
       var el = document.getElementById(id); if(!el) return;
       el.innerHTML = CFG.logoImg ? '<img src="'+CFG.logoImg+'" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">' : '<i class="'+(CFG.logoIcon||'fa-solid fa-graduation-cap')+'"></i>';
     });
-    ['grSbApp','grSbAppMob'].forEach(function(id) { var el=document.getElementById(id); if(el) el.textContent=CFG.appName||'SISKA'; });
+    ['grSbApp','grSbAppMob'].forEach(function(id) { var el=document.getElementById(id); if(el) el.textContent=CFG.appName||'SINMA'; });
     document.getElementById('grSchDisp').textContent = CFG.schoolName||'';
     applyAvatarGuru();
     swGTab('gSiswa', document.querySelector('#guruD .nl'));
@@ -415,7 +415,7 @@ function doBackup() {
       +String(now.getDate()).padStart(2,'0')+'_'
       +String(now.getHours()).padStart(2,'0')
       +String(now.getMinutes()).padStart(2,'0');
-    var fname = 'SISKA_backup_'+ts+'.json';
+    var fname = 'SINMA_backup_'+ts+'.json';
     var blob = new Blob([jsonStr], {type:'application/json'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -2038,7 +2038,7 @@ function _doExportExcel() {
     var ws=XLSX.utils.aoa_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb,ws,(mp.kode_mapel||mp.nama_mapel).substring(0,31));
   });
-  XLSX.writeFile(wb,'Nilai_SISKA_'+new Date().toLocaleDateString('id-ID').replace(/\//g,'-')+'.xlsx');
+  XLSX.writeFile(wb,'Nilai_SINMA_'+new Date().toLocaleDateString('id-ID').replace(/\//g,'-')+'.xlsx');
   toast('File Excel diunduh','s');
 }
 
@@ -2069,7 +2069,7 @@ function onLogoFileChg(input) {
 }
 function saveSet(e) {
   e.preventDefault();
-  CFG.appName=document.getElementById('setApp').value.trim()||'SISKA 2026';
+  CFG.appName=document.getElementById('setApp').value.trim()||'SINMA 2026';
   CFG.schoolName=document.getElementById('setSchool').value.trim()||'SMA Negeri Unggulan';
   var np=document.getElementById('setPass').value;
   if(np){ var adm=D.users.find(function(u){return u.id===ME.id;}); if(adm) adm.password=np; }
@@ -6100,8 +6100,8 @@ doLogin = function(e) {
 // =====================================================================
 // DEBUG & VERIFICATION FUNCTIONS (jalankan dari browser console)
 // =====================================================================
-window.debugSISKA = function() {
-  console.log('=== DEBUG SISKA 2026 ===');
+window.debugSINMA = function() {
+  console.log('=== DEBUG SINMA 2026 ===');
   console.log('LocalStorage D:', D);
   console.log('Current User (ME):', ME);
   console.log('Config (CFG):', CFG);
@@ -6131,7 +6131,7 @@ window.debugSISKA = function() {
 };
 
 // Shortcut
-window.debug = window.debugSISKA;
+window.debug = window.debugSINMA;
 
 
 // =====================================================================
@@ -6143,20 +6143,19 @@ function toggleTheme() {
   
   if(newTheme === 'light') {
     document.documentElement.setAttribute('data-theme', 'light');
-    localStorage.setItem('siska_theme', 'light');
+    localStorage.setItem('sinma_theme', 'light');
     document.getElementById('themeIcon').className = 'fa-solid fa-moon';
   } else {
     document.documentElement.removeAttribute('data-theme');
-    localStorage.setItem('siska_theme', 'dark');
+    localStorage.setItem('sinma_theme', 'dark');
     document.getElementById('themeIcon').className = 'fa-solid fa-sun';
   }
 }
 
 // Load theme from localStorage on page load
 (function() {
-  var savedTheme = localStorage.getItem('siska_theme');
+  var savedTheme = localStorage.getItem('sinma_theme');
   if(savedTheme === 'light') {
     document.documentElement.setAttribute('data-theme', 'light');
   }
 })();
-
