@@ -1,8 +1,15 @@
 // SINMA 2026 - Service Worker
-var CACHE_NAME = 'sinma-v3';
-var STATIC_ASSETS = [
+// FIX v4: Network-first untuk app files agar update selalu terambil di HP
+var CACHE_NAME = 'sinma-v4';
+
+// File aplikasi → pakai Network-First (selalu ambil terbaru, fallback ke cache)
+var NETWORK_FIRST = [
   './index.html',
-  './app.js',
+  './app.js'
+];
+
+// Asset CDN → pakai Cache-First (jarang berubah, hemat data)
+var CACHE_FIRST_ASSETS = [
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
 ];
@@ -10,7 +17,7 @@ var STATIC_ASSETS = [
 self.addEventListener('install', function(event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function(cache) {
-      return cache.addAll(STATIC_ASSETS).catch(function(err) {
+      return cache.addAll(CACHE_FIRST_ASSETS).catch(function(err) {
         console.log('Cache addAll partial error:', err);
       });
     })
@@ -32,26 +39,51 @@ self.addEventListener('activate', function(event) {
 
 self.addEventListener('fetch', function(event) {
   var url = event.request.url;
-  // Jangan cache request ke GAS (selalu fetch langsung)
-  if (url.includes('script.google.com') || url.includes('macros/s/')) {
+
+  // Jangan intercept request POST / non-GET sama sekali
+  if (event.request.method !== 'GET') return;
+
+  // Jangan cache / intercept request ke GAS → langsung ke jaringan
+  if (url.includes('script.google.com') || url.includes('macros/s/') || url.includes('script.googleusercontent.com')) {
     return;
   }
-  event.respondWith(
-    caches.match(event.request).then(function(cached) {
-      if (cached) return cached;
-      return fetch(event.request).then(function(response) {
-        if (!response || response.status !== 200 || response.type === 'opaque') {
-          return response;
+
+  // Cek apakah ini file aplikasi (network-first)
+  var isAppFile = NETWORK_FIRST.some(function(f) {
+    return url.includes(f.replace('./', ''));
+  });
+
+  if (isAppFile) {
+    // NETWORK-FIRST: ambil dari jaringan dulu, simpan ke cache, fallback ke cache kalau offline
+    event.respondWith(
+      fetch(event.request).then(function(response) {
+        if (response && response.status === 200) {
+          var clone = response.clone();
+          caches.open(CACHE_NAME).then(function(cache) { cache.put(event.request, clone); });
         }
-        var clone = response.clone();
-        caches.open(CACHE_NAME).then(function(cache) {
-          cache.put(event.request, clone);
-        });
         return response;
       }).catch(function() {
-        // Offline fallback
-        return caches.match('./index.html');
-      });
-    })
-  );
+        return caches.match(event.request).then(function(cached) {
+          return cached || caches.match('./index.html');
+        });
+      })
+    );
+  } else {
+    // CACHE-FIRST: untuk CDN assets (font, icon, dll)
+    event.respondWith(
+      caches.match(event.request).then(function(cached) {
+        if (cached) return cached;
+        return fetch(event.request).then(function(response) {
+          if (!response || response.status !== 200 || response.type === 'opaque') {
+            return response;
+          }
+          var clone = response.clone();
+          caches.open(CACHE_NAME).then(function(cache) { cache.put(event.request, clone); });
+          return response;
+        }).catch(function() {
+          return caches.match('./index.html');
+        });
+      })
+    );
+  }
 });
