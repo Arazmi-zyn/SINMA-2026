@@ -227,8 +227,13 @@ document.addEventListener('DOMContentLoaded', function() {
       setStep(2, 'done');
       var localFdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
+      // FIX: Preserve foto lokal sebelum ditimpa data server
+      var localFotoMap = {};
+      if(D && D.users) D.users.forEach(function(u){ if(u.foto) localFotoMap[u.id] = u.foto; });
       D = res.data; CFG = res.cfg || CFG;
       D.submissions.forEach(function(s) { if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
+      // FIX: Restore foto lokal jika server belum punya
+      D.users.forEach(function(u){ if(!u.foto && localFotoMap[u.id]) u.foto = localFotoMap[u.id]; });
       saveLocal();
     } else {
       setStep(2, 'error');
@@ -248,10 +253,23 @@ document.addEventListener('DOMContentLoaded', function() {
 function _syncGASBackground() {
   callGAS('initLoad', null, function(res) {
     if (res && res.success && res.data) {
+      // Simpan fileDataUrl submissions yang hanya ada di lokal
       var localFdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
+
+      // FIX: Simpan foto users yang hanya ada di lokal (server mungkin belum punya)
+      // Tanpa ini, background sync akan menimpa D.users dengan data server yang fotonya kosong
+      var localFotoMap = {};
+      if(D && D.users) D.users.forEach(function(u){ if(u.foto) localFotoMap[u.id] = u.foto; });
+
       D = res.data; CFG = res.cfg || CFG;
+
+      // Restore fileDataUrl yang hanya ada di lokal
       D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
+
+      // FIX: Restore foto yang hanya ada di lokal (server belum tersync)
+      D.users.forEach(function(u){ if(!u.foto && localFotoMap[u.id]) u.foto = localFotoMap[u.id]; });
+
       saveLocal();
     }
   }, function(){/* silent fail - pakai data lokal */});
