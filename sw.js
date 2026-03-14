@@ -1,5 +1,5 @@
 // SINMA 2026 - Service Worker
-var CACHE_NAME = 'sinma-v2';
+var CACHE_NAME = 'sinma-v3';
 var STATIC_ASSETS = [
   './index.html',
   './app.js',
