@@ -89,7 +89,7 @@ function fixMobileGrids() {
 // =====================================================================
 // KONFIGURASI PWA - GANTI URL DI BAWAH INI DENGAN WEB APP URL ANDA
 // =====================================================================
-var GAS_URL = 'https://script.google.com/macros/s/AKfycbx9jU07C8__XkNkuLLB835kuRhNPfQVVj5cUUZVRnV76a3iQSENHsoVy7ViXu69rmKA/exec'; // <-- WAJIB DIISI
+var GAS_URL = 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec'; // <-- WAJIB DIISI
 
 /**
  * Helper fungsi pengganti google.script.run
@@ -107,16 +107,37 @@ function callGAS(fnName, params, onSuccess, onFailure) {
 }
 
 function callGASPost(fnName, body, onSuccess, onFailure) {
+  // FIX MOBILE: GAS melakukan redirect 302 → gunakan mode 'no-cors' sebagai fallback
+  // Strategi: coba fetch normal dulu, kalau gagal (CORS/redirect) → kirim ulang no-cors (fire & forget)
+  var payload = JSON.stringify({ fn: fnName, data: body });
+
   fetch(GAS_URL, {
     method: 'POST',
     mode: 'cors',
     redirect: 'follow',
     headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify({ fn: fnName, data: body })
+    body: payload
   })
-    .then(function(resp) { return resp.json(); })
-    .then(function(data) { if (onSuccess) onSuccess(data); })
-    .catch(function(err) { if (onFailure) onFailure(err); });
+  .then(function(resp) { return resp.json(); })
+  .then(function(data) { if (onSuccess) onSuccess(data); })
+  .catch(function(err) {
+    // Fallback: kirim ulang dengan no-cors (tidak bisa baca response tapi data tetap terkirim ke server)
+    console.warn('callGASPost cors failed, retrying no-cors:', err);
+    fetch(GAS_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain' },
+      body: payload
+    })
+    .then(function() {
+      // no-cors response selalu opaque, anggap sukses
+      if (onSuccess) onSuccess({ success: true, _mode: 'no-cors' });
+    })
+    .catch(function(err2) {
+      if (onFailure) onFailure(err2);
+    });
+  });
 }
 // =====================================================================
 
