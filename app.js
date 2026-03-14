@@ -106,38 +106,57 @@ function callGAS(fnName, params, onSuccess, onFailure) {
     .catch(function(err) { if (onFailure) onFailure(err); });
 }
 
+// Cache URL redirect GAS agar tidak perlu prefetch setiap kali
+var _gasRedirectUrl = null;
+
 function callGASPost(fnName, body, onSuccess, onFailure) {
-  // FIX MOBILE: GAS melakukan redirect 302 → gunakan mode 'no-cors' sebagai fallback
-  // Strategi: coba fetch normal dulu, kalau gagal (CORS/redirect) → kirim ulang no-cors (fire & forget)
   var payload = JSON.stringify({ fn: fnName, data: body });
 
-  fetch(GAS_URL, {
-    method: 'POST',
-    mode: 'cors',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain' },
-    body: payload
-  })
-  .then(function(resp) { return resp.json(); })
-  .then(function(data) { if (onSuccess) onSuccess(data); })
-  .catch(function(err) {
-    // Fallback: kirim ulang dengan no-cors (tidak bisa baca response tapi data tetap terkirim ke server)
-    console.warn('callGASPost cors failed, retrying no-cors:', err);
-    fetch(GAS_URL, {
+  function _doPost(url) {
+    fetch(url, {
       method: 'POST',
-      mode: 'no-cors',
+      mode: 'cors',
       redirect: 'follow',
       headers: { 'Content-Type': 'text/plain' },
       body: payload
     })
-    .then(function() {
-      // no-cors response selalu opaque, anggap sukses
-      if (onSuccess) onSuccess({ success: true, _mode: 'no-cors' });
-    })
-    .catch(function(err2) {
-      if (onFailure) onFailure(err2);
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) { if (onSuccess) onSuccess(data); })
+    .catch(function(err) {
+      console.warn('callGASPost POST gagal:', err);
+      // Fallback no-cors — fire & forget, data tetap terkirim
+      fetch(url, {
+        method: 'POST',
+        mode: 'no-cors',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain' },
+        body: payload
+      })
+      .then(function() { if (onSuccess) onSuccess({ success: true, _mode: 'no-cors' }); })
+      .catch(function(e2) { if (onFailure) onFailure(e2); });
     });
-  });
+  }
+
+  // FIX REDIRECT: GAS melakukan 302 redirect yang menyebabkan POST body hilang (browser ubah POST→GET).
+  // Solusi: lakukan GET dulu ke GAS_URL untuk mendapat URL akhir setelah redirect,
+  // lalu POST langsung ke URL akhir tersebut sehingga body tidak hilang.
+  if (_gasRedirectUrl) {
+    // Sudah punya URL redirect → langsung POST
+    _doPost(_gasRedirectUrl);
+  } else {
+    // Belum ada → prefetch dulu via GET untuk dapat URL akhir
+    fetch(GAS_URL + '?fn=ping', { method: 'GET', mode: 'cors', redirect: 'follow' })
+      .then(function(resp) {
+        // resp.url adalah URL akhir setelah semua redirect
+        _gasRedirectUrl = (resp.url && resp.url !== GAS_URL) ? resp.url : GAS_URL;
+        // Ganti path /exec dengan /exec di URL akhir, tapi tetap pakai base URL yang sama
+        _doPost(_gasRedirectUrl);
+      })
+      .catch(function() {
+        // Prefetch gagal → coba langsung ke GAS_URL
+        _doPost(GAS_URL);
+      });
+  }
 }
 // =====================================================================
 
