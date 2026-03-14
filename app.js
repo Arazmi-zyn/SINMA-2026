@@ -254,9 +254,22 @@ function saveLocal() {
   } catch(e) {}
 }
 
-function syncServer() {
+function syncServer(onDone) {
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
-  callGASPost('syncData', { data:D, cfg:CFG }, function() {}, function(e) { console.warn('syncServer failed:', e); });
+  // FIX: Kirim sebagai JSON string agar Apps Script (doPost → syncData) dapat mem-parse dengan benar
+  // Sebelumnya dikirim sebagai Object → JSON.parse(object) = SyntaxError → data tidak tersimpan ke Sheet
+  var payload = JSON.stringify({ data: D, cfg: CFG });
+  callGASPost('syncData', payload, function(res) {
+    if (res && res.success) {
+      console.log('syncServer: data berhasil disimpan ke Sheet');
+    } else {
+      console.warn('syncServer: server merespons gagal', res && res.message);
+    }
+    if (onDone) onDone(res);
+  }, function(e) {
+    console.warn('syncServer failed:', e);
+    if (onDone) onDone(null);
+  });
 }
 
 
@@ -388,12 +401,24 @@ function afterLogin() {
 }
 
 function doLogout() {
-  ME = null;
-  document.getElementById('adminD').classList.add('hidden');
-  document.getElementById('stuD').classList.add('hidden');
-  document.getElementById('guruD').classList.add('hidden');
-  document.getElementById('loginS').classList.remove('hidden');
-  if (_timerLoop) { clearInterval(_timerLoop); _timerLoop = null; }
+  // FIX: Sync data ke server SEBELUM logout agar perubahan terakhir tidak hilang
+  // Logout baru dijalankan setelah sync selesai (atau timeout 4 detik)
+  var _performLogout = function() {
+    ME = null;
+    document.getElementById('adminD').classList.add('hidden');
+    document.getElementById('stuD').classList.add('hidden');
+    document.getElementById('guruD').classList.add('hidden');
+    document.getElementById('loginS').classList.remove('hidden');
+    if (_timerLoop) { clearInterval(_timerLoop); _timerLoop = null; }
+  };
+
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
+    toast('Menyimpan data ke server...', 'i');
+    var _timeout = setTimeout(function() { _performLogout(); }, 4000);
+    syncServer(function() { clearTimeout(_timeout); _performLogout(); });
+  } else {
+    _performLogout();
+  }
 }
 
 // =====================================================================
