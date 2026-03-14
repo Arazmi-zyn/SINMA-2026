@@ -666,7 +666,9 @@ function _saveFotoToServer(userId, b64, onDone) {
   if(ME && ME.id===userId) ME.foto = b64;
   saveLocal();
   if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    callGASPost('saveProfilePhoto', {userId: userId, b64: b64}, function(r){ if(onDone) onDone(r && r.success); }, function(){ if(onDone) onDone(false); });
+    // FIX: Kirim sebagai Array [userId, b64] agar doPost → _callFunction → saveProfilePhoto(p[0], p[1]) benar
+    // Sebelumnya dikirim sebagai Object {userId, b64} → p[0]={userId,b64}, p[1]=undefined → gagal diam-diam
+    callGASPost('saveProfilePhoto', [userId, b64], function(r){ if(onDone) onDone(r && r.success); }, function(){ if(onDone) onDone(false); });
   } else {
     if(onDone) onDone(true);
   }
@@ -2306,7 +2308,9 @@ function doKumpul(e) {
   reader.onload=function(ev){
     var b64=ev.target.result; subObj.fileDataUrl=b64; subObj.fileName=file.name;
     if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec'){
-      callGASPost('uploadFileToDrive', {base64Data:b64, fileName:file.name, mimeType:file.type}, function(res){
+      // FIX: Kirim sebagai Array [b64, fileName, mimeType] agar doPost → _callFunction → uploadFileToDrive(p[0],p[1],p[2]) benar
+      // Sebelumnya dikirim sebagai Object {base64Data,fileName,mimeType} → p[0]=object, p[1]=undefined, p[2]=undefined → gagal diam-diam
+      callGASPost('uploadFileToDrive', [b64, file.name, file.type], function(res){
           btn.disabled=false; document.getElementById('kpUploadInfo').classList.add('hidden');
           if(res&&res.success){subObj.fileId=res.fileId;subObj.fileViewUrl=res.viewUrl;subObj.fileDlUrl=res.dlUrl;}
           if(existing>=0)Object.assign(D.submissions[existing],subObj); else D.submissions.push(subObj);
