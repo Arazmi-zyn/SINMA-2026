@@ -1,6 +1,6 @@
 // SINMA 2026 - Service Worker
-// FIX v4: Network-first untuk app files agar update selalu terambil di HP
-var CACHE_NAME = 'sinma-v4';
+// v5: Update GAS_URL baru
+var CACHE_NAME = 'sinma-v5';
 
 // File aplikasi → pakai Network-First (selalu ambil terbaru, fallback ke cache)
 var NETWORK_FIRST = [
