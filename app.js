@@ -2,7 +2,7 @@
 // STATE
 // =====================================================================
 var D = { users:[], classes:[], subjects:[], grades:[], tasks:[], submissions:[], teacherSubjects:[], journals:[], absences:[], ekskuls:[], ekskulMembers:[], ekskulAbsences:[], ekskulGrades:[], exams:[], examResults:[], bankSoal:[], tabunganTx:[] };
-var CFG = { appName:'SINMA 2026', schoolName:'SMA Negeri Unggulan', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
+var CFG = { appName:'SINMA 2026', schoolName:'Refres Sampai Masuk Data', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
 var ME = null;
 var _appInit = false;
 var _showPass = false;
@@ -2359,7 +2359,7 @@ function doKumpul(e) {
   var reader=new FileReader();
   reader.onload=function(ev){
     var b64=ev.target.result; subObj.fileDataUrl=b64; subObj.fileName=file.name;
-    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbw_r3TjMICKu5n8hHQaeug4RRH9qNwA4o8uguhn5_tH46w0Q35U8WSDCEbFD4bPEIvahQ/exec'){
+    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec'){
       // FIX: Kirim sebagai Array [b64, fileName, mimeType] agar doPost → _callFunction → uploadFileToDrive(p[0],p[1],p[2]) benar
       // Sebelumnya dikirim sebagai Object {base64Data,fileName,mimeType} → p[0]=object, p[1]=undefined, p[2]=undefined → gagal diam-diam
       callGASPost('uploadFileToDrive', [b64, file.name, file.type], function(res){
