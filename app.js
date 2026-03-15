@@ -2,7 +2,7 @@
 // STATE
 // =====================================================================
 var D = { users:[], classes:[], subjects:[], grades:[], tasks:[], submissions:[], teacherSubjects:[], journals:[], absences:[], ekskuls:[], ekskulMembers:[], ekskulAbsences:[], ekskulGrades:[], exams:[], examResults:[], bankSoal:[], tabunganTx:[] };
-var CFG = { appName:'SINMA 2026', schoolName:'Refres Sampai Masuk Data', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
+var CFG = { appName:'SINMA 2026', schoolName:'SMA Negeri Unggulan', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
 var ME = null;
 var _appInit = false;
 var _showPass = false;
@@ -144,7 +144,6 @@ document.addEventListener('DOMContentLoaded', function() {
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
-  // Load data lokal dulu (instan)
   try {
     var ld = localStorage.getItem('sinmaData');
     var lc = localStorage.getItem('sinmaCfg');
@@ -161,7 +160,17 @@ document.addEventListener('DOMContentLoaded', function() {
     initApp();
   }
 
-  // Jika ada data lokal → tampil langsung, sync di background
+  function _showErr(msg) {
+    setLoad(100, 'Gagal');
+    var errBox = document.getElementById('loadErrBox');
+    var errMsg = document.getElementById('loadErrMsg');
+    var skip   = document.getElementById('loadSkip');
+    if (errBox) errBox.style.display = 'block';
+    if (errMsg) errMsg.textContent = msg;
+    if (skip)   skip.style.display = 'block';
+  }
+
+  // Ada data lokal → tampil langsung
   if (hasLocal) {
     setLoad(100, 'Siap!');
     _showApp();
@@ -169,29 +178,37 @@ document.addEventListener('DOMContentLoaded', function() {
     return;
   }
 
-  // Belum ada data lokal → fetch dari server
-  setLoad(20, 'Mengambil data...');
+  // Belum ada data → fetch server
+  setLoad(20, 'Menghubungi server...');
 
-  // Timeout 5 detik → tampil login meski data belum ada
   var _fetchTimeout = setTimeout(function() {
-    setLoad(100, 'Lanjut tanpa data...');
-    _showApp();
-  }, 5000);
+    _showErr('Server tidak merespons (timeout 10 detik). Klik Lanjutkan.');
+    setTimeout(_showApp, 300);
+  }, 10000);
 
-  callGAS('initLoad', null, function(res) {
-    clearTimeout(_fetchTimeout);
-    if (res && res.success && res.data) {
-      D = res.data; CFG = res.cfg || CFG;
-      saveLocal();
-      localStorage.setItem('sinmaLastSync', Date.now().toString());
-    }
-    setLoad(100, 'Siap!');
-    _showApp();
-  }, function() {
-    clearTimeout(_fetchTimeout);
-    setLoad(100, 'Mode offline');
-    _showApp();
-  });
+  fetch(GAS_URL + '?fn=initLoad', { method:'GET', mode:'cors', redirect:'follow' })
+    .then(function(r) {
+      setLoad(70, 'Memproses data...');
+      return r.json();
+    })
+    .then(function(res) {
+      clearTimeout(_fetchTimeout);
+      if (res && res.success && res.data) {
+        setLoad(100, 'Berhasil! ' + (res.data.users||[]).length + ' user dimuat');
+        D = res.data; CFG = res.cfg || CFG;
+        saveLocal();
+        localStorage.setItem('sinmaLastSync', Date.now().toString());
+        setTimeout(_showApp, 400);
+      } else {
+        _showErr('Server error: ' + (res && res.message || 'unknown'));
+        setTimeout(_showApp, 300);
+      }
+    })
+    .catch(function(err) {
+      clearTimeout(_fetchTimeout);
+      _showErr('CORS/Network error: ' + err.message + ' — Cek console F12');
+      setTimeout(_showApp, 300);
+    });
 });
 
 // Sync data dari server di background setelah login
