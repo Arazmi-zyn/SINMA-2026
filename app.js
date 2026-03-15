@@ -2386,7 +2386,7 @@ function doKumpul(e) {
   var reader=new FileReader();
   reader.onload=function(ev){
     var b64=ev.target.result; subObj.fileDataUrl=b64; subObj.fileName=file.name;
-    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec'){
+    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbxuFwi97RN5uIODKNMBfOsWM1KawC_vs_ulx_KkNC1LuhAnxbCdqcbsy9cknHAEwlK5/exec'){
       // FIX: Kirim sebagai Array [b64, fileName, mimeType] agar doPost → _callFunction → uploadFileToDrive(p[0],p[1],p[2]) benar
       // Sebelumnya dikirim sebagai Object {base64Data,fileName,mimeType} → p[0]=object, p[1]=undefined, p[2]=undefined → gagal diam-diam
       callGASPost('uploadFileToDrive', [b64, file.name, file.type], function(res){
