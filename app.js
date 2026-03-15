@@ -138,94 +138,42 @@ function loadXLSX(cb){
   document.head.appendChild(s);
 }
 
-// ===== MAIN INIT — pakai DOMContentLoaded, JAUH lebih cepat dari window.onload =====
+// ===== MAIN INIT — SELALU INSTAN =====
 document.addEventListener('DOMContentLoaded', function() {
-  // Terapkan tema sebelum apapun render (cegah flash)
   (function(){var t=localStorage.getItem('sinma_theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');})();
-
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
-  // Muat data lokal (instant)
-  setLoad(10, 'Memuat data lokal...');
+  // Load data lokal (0ms - instan)
   try {
     var ld = localStorage.getItem('sinmaData');
     var lc = localStorage.getItem('sinmaCfg');
     if (ld) D = JSON.parse(ld);
     if (lc) CFG = JSON.parse(lc);
-    // FIX: Restore foto dari localStorage terpisah (sinma_foto_{userId})
-    // karena foto tidak lagi disimpan di dalam sinmaData untuk mencegah QuotaExceededError
-    restoreFotoFromLocal();
   } catch(e) {}
 
-  // Kalau sudah ada data lokal → tampilkan login SEKARANG, sync GAS di background
-  var hasLocal = !!(localStorage.getItem('sinmaData'));
-
-  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    setLoad(100, 'Mode Offline');
-    setTimeout(function() { if (!_appInit) { _appInit = true; initApp(); } }, 300);
-    return;
-  }
-
-  if (hasLocal) {
-    // Ada cache lokal → tampilkan login LANGSUNG tanpa tunggu GAS
-    setLoad(100, 'Data lokal siap!');
-    if (!_appInit) { _appInit = true; initApp(); }
-    // Sync GAS di background (diam-diam, tidak blokir UI)
-    _syncGASBackground();
-    return;
-  }
-
-  // Tidak ada cache → perlu fetch GAS dulu (first time setup)
-  setLoad(30, 'Menghubungi server...');
-  setStep(1, 'active');
-
-  var skipTimer = setTimeout(function() {
-    document.getElementById('loadSkip').style.display = 'block';
-    showLoadErr('Koneksi lambat. Klik tombol di bawah untuk melanjutkan.', '');
-  }, 3000);
-
-  var forceTimer = setTimeout(function() {
-    if (!_appInit) { clearTimeout(skipTimer); _appInit = true; initApp(); }
-  }, 5000);
-
-  setStep(2, 'active');
-  callGAS('initLoad', null, function(res) {
-    clearTimeout(skipTimer); clearTimeout(forceTimer);
-    setStep(1, 'done');
-    setLoad(70, 'Memproses data...');
-    if (res && res.success && res.data) {
-      setStep(2, 'done');
-      var localFdMap = {};
-      if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
-      D = res.data; CFG = res.cfg || CFG;
-      D.submissions.forEach(function(s) { if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
-      // FIX: Restore foto dari localStorage terpisah (sinma_foto_{userId})
-      restoreFotoFromLocal();
-      saveLocal();
-    } else {
-      setStep(2, 'error');
-      showLoadErr('Data dari server tidak valid.', (res && res.message) ? res.message : '');
-    }
-    setStep(3, 'active'); setLoad(95, 'Mempersiapkan tampilan...');
-    setTimeout(function() { setStep(3, 'done'); setLoad(100, 'Selesai!'); if (!_appInit) { _appInit = true; initApp(); } }, 200);
-  }, function(err) {
-    clearTimeout(skipTimer); clearTimeout(forceTimer);
-    setStep(1, 'error'); setStep(2, 'error');
-    showLoadErr('Gagal terhubung ke server.', (err && err.message) ? err.message : String(err));
-    setTimeout(function() { if (!_appInit) { _appInit = true; initApp(); } }, 1500);
-  });
+  // SELALU tampil login langsung — tidak pernah tunggu server saat loading
+  setLoad(100, 'Siap!');
+  if (!_appInit) { _appInit = true; initApp(); }
 });
 
-// Sync data dari GAS di background tanpa blokir UI
+// Sync data dari server di background setelah login
+// Dipanggil dari afterLogin() agar tidak lambatkan loading awal
 function _syncGASBackground() {
+  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
   callGAS('initLoad', null, function(res) {
     if (res && res.success && res.data) {
       var localFdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
+      // Preserve foto yang sudah ada di D (dari Photos sheet)
+      var localFotoMap = {};
+      if(D && D.users) D.users.forEach(function(u){ if(u.foto) localFotoMap[u.id] = u.foto; });
       D = res.data; CFG = res.cfg || CFG;
       D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
+      // Gabung foto dari server + foto lokal
+      D.users.forEach(function(u){ if(!u.foto && localFotoMap[u.id]) u.foto = localFotoMap[u.id]; });
       saveLocal();
+      localStorage.setItem('sinmaLastSync', Date.now().toString());
     }
   }, function(){});
 }
@@ -385,35 +333,64 @@ function doLogin(e) {
   err.style.display = 'none';
   setLoginLoading(true);
 
-  // Coba login ke server dulu, fallback ke lokal
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
+  // Jika belum ada data lokal sama sekali, fetch dari server dulu
+  var hasUsers = D.users && D.users.length > 0;
+  if (!hasUsers && GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
+    // Langsung login ke server (verifikasi + ambil data sekaligus)
     callGAS('login', [u, p], function(r) {
-        setLoginLoading(false);
-        if (r && r.success) {
-          ME = r.user;
-          var localUser = D.users.find(function(x) { return x.id === ME.id || x.username === ME.username; });
-          if (localUser) {
-            if (!ME.password && localUser.password) ME.password = localUser.password;
-            if (localUser.foto) ME.foto = localUser.foto;
-            if (localUser.wali_kelas_id) ME.wali_kelas_id = localUser.wali_kelas_id;
+      if (r && r.success) {
+        ME = r.user;
+        // Ambil semua data dari server
+        callGAS('initLoad', null, function(res) {
+          setLoginLoading(false);
+          if (res && res.success && res.data) {
+            D = res.data; CFG = res.cfg || CFG;
+            saveLocal();
+            localStorage.setItem('sinmaLastSync', Date.now().toString());
           }
           afterLogin();
-        }
-        else { err.style.display = 'block'; }
-      }, function() {
+        }, function() {
+          setLoginLoading(false);
+          afterLogin();
+        });
+      } else {
         setLoginLoading(false);
-        var found = D.users.find(function(x) { return x.username === u && x.password === p; });
-        if (found) { ME = found; afterLogin(); }
-        else { err.style.display = 'block'; }
+        err.style.display = 'block';
       }
-    );
-  } else {
-    setTimeout(function() {
+    }, function() {
       setLoginLoading(false);
-      var found = D.users.find(function(x) { return x.username === u && x.password === p; });
-      if (found) { ME = found; afterLogin(); }
-      else { err.style.display = 'block'; }
-    }, 700);
+      err.style.display = 'block';
+    });
+    return;
+  }
+
+  // Ada data lokal — login lokal (cepat), verifikasi ke server paralel
+  var found = D.users.find(function(x) { return x.username === u && x.password === p; });
+  if (found) {
+    setLoginLoading(false);
+    ME = found;
+    afterLogin();
+  } else if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
+    // Tidak ada di lokal — coba server
+    callGAS('login', [u, p], function(r) {
+      setLoginLoading(false);
+      if (r && r.success) {
+        ME = r.user;
+        var localUser = D.users.find(function(x) { return x.id === ME.id || x.username === ME.username; });
+        if (localUser) {
+          if (!ME.password && localUser.password) ME.password = localUser.password;
+          if (localUser.foto) ME.foto = localUser.foto;
+          if (localUser.wali_kelas_id) ME.wali_kelas_id = localUser.wali_kelas_id;
+        }
+        afterLogin();
+      } else { err.style.display = 'block'; }
+    }, function() {
+      setLoginLoading(false);
+      err.style.display = 'block';
+    });
+  } else {
+    setLoginLoading(false);
+    err.style.display = 'block';
   }
 }
 
@@ -453,6 +430,12 @@ function afterLogin() {
     swStuTab('sNilai', document.querySelector('#stuD .nl'));
     renderStuNilai();
     renderStuTugas();
+  }
+  // Setelah dashboard tampil, sync data terbaru dari server di background
+  // (tidak blokir UI, data akan terupdate diam-diam)
+  var lastSync = parseInt(localStorage.getItem('sinmaLastSync') || '0');
+  if (Date.now() - lastSync > 60 * 1000) { // sync jika data > 1 menit
+    _syncGASBackground();
   }
 }
 
@@ -2354,7 +2337,7 @@ function doKumpul(e) {
   var reader=new FileReader();
   reader.onload=function(ev){
     var b64=ev.target.result; subObj.fileDataUrl=b64; subObj.fileName=file.name;
-    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbxrH4EnF_MQFC46NyZZlSRgtVgVkz6_LcUzcyQ9myq2JsGmHnMLOqgEfnNEmJJtLWN9ew/exec'){
+    if(GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbw_r3TjMICKu5n8hHQaeug4RRH9qNwA4o8uguhn5_tH46w0Q35U8WSDCEbFD4bPEIvahQ/exec'){
       // FIX: Kirim sebagai Array [b64, fileName, mimeType] agar doPost → _callFunction → uploadFileToDrive(p[0],p[1],p[2]) benar
       // Sebelumnya dikirim sebagai Object {base64Data,fileName,mimeType} → p[0]=object, p[1]=undefined, p[2]=undefined → gagal diam-diam
       callGASPost('uploadFileToDrive', [b64, file.name, file.type], function(res){
