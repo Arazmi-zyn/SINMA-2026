@@ -332,7 +332,7 @@ tr:hover td{background:rgba(255,255,255,.025)}
     <div class="load-step" id="lstep2">⏳ Mengambil data spreadsheet...</div>
     <div class="load-step" id="lstep3">⏳ Mempersiapkan tampilan...</div>
   </div>
-  <button id="loadSkip" onclick="skipLoading()">
+  <button id="loadSkip" onclick="skipLoading()" style="display:none">
     <i class="fa-solid fa-forward"></i> Lanjutkan dengan data lokal
   </button>
   <div id="loadErrBox">
@@ -340,6 +340,17 @@ tr:hover td{background:rgba(255,255,255,.025)}
     <p class="err-detail" id="loadErrDetail"></p>
   </div>
 </div>
+<script>
+// Fallback: jika app.js tidak jalan dalam 3 detik, sembunyikan loading paksa
+window._loadFallback = setTimeout(function() {
+  var ls = document.getElementById('loadingS');
+  var login = document.getElementById('loginS');
+  if (ls && ls.style.display !== 'none') {
+    ls.style.display = 'none';
+    if (login) login.classList.remove('hidden');
+  }
+}, 3000);
+</script>
 
 <div id="toasts"></div>
 
@@ -2025,7 +2036,7 @@ tr:hover td{background:rgba(255,255,255,.025)}
 <div id="rekapBulananPrintArea" style="visibility:hidden;position:fixed;inset:0;background:#fff;padding:28px;overflow:auto;z-index:-1;font-family:Arial,sans-serif;font-size:11px;color:#111"></div>
 
 <!-- =================== SCRIPTS =================== -->
-<script src="app.js" defer></script>
+<script src="app.js?v=20260316"></script>
 
 
 <!-- MODAL SKOR UJIAN SISWA -->
