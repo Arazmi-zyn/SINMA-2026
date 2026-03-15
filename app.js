@@ -144,7 +144,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
-  // Load data lokal dulu
+  // Load data lokal
   try {
     var ld = localStorage.getItem('sinmaData');
     var lc = localStorage.getItem('sinmaCfg');
@@ -157,58 +157,50 @@ document.addEventListener('DOMContentLoaded', function() {
   function _showApp() {
     if (_appInit) return;
     _appInit = true;
-    if (window._loadFallback) clearTimeout(window._loadFallback);
     initApp();
   }
 
-  function _fetchServer(onDone) {
-    fetch(GAS_URL + '?fn=initLoad', { method:'GET', mode:'cors', redirect:'follow' })
-      .then(function(r){ return r.json(); })
-      .then(function(res) {
-        if (res && res.success && res.data) {
-          var localFdMap = {};
-          if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
-          D = res.data; CFG = res.cfg || CFG;
-          D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
-          // Update ME jika sudah login
-          if (ME && ME.id) {
-            var fresh = D.users.find(function(u){ return u.id === ME.id; });
-            if (fresh) { ME.foto = fresh.foto || ME.foto; }
-          }
-          saveLocal();
-          localStorage.setItem('sinmaLastSync', Date.now().toString());
-        }
-        if (onDone) onDone(true);
-      })
-      .catch(function() { if (onDone) onDone(false); });
+  function _applyServerData(res) {
+    if (res && res.success && res.data) {
+      var fdMap = {};
+      if(D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id]=s.fileDataUrl; });
+      D = res.data; CFG = res.cfg || CFG;
+      D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl=fdMap[s.id]; });
+      saveLocal();
+      localStorage.setItem('sinmaLastSync', Date.now().toString());
+    }
   }
 
+  // Ada data lokal → tampil langsung + update dari server di background
   if (hasLocal) {
-    // Tampil login langsung dari lokal
     setLoad(100, 'Siap!');
     _showApp();
-    // Fetch server di background — update D & localStorage dengan data terbaru
-    _fetchServer(null);
+    callGAS('initLoad', null, function(res){ _applyServerData(res); }, function(){});
     return;
   }
 
-  // Belum ada data sama sekali — harus tunggu server
-  setLoad(20, 'Menghubungi server...');
+  // Belum ada data → harus fetch server dulu
+  setLoad(30, 'Mengambil data dari server...');
   var _t = setTimeout(function() {
-    var s = document.getElementById('loadSkip');
-    var b = document.getElementById('loadErrBox');
-    var m = document.getElementById('loadErrMsg');
-    if(s) s.style.display='block';
-    if(b) b.style.display='block';
-    if(m) m.textContent='Server lambat. Klik Lanjutkan.';
+    setLoad(100, 'Timeout');
+    document.getElementById('loadSkip').style.display = 'block';
     _showApp();
-  }, 10000);
+  }, 15000);
 
-  _fetchServer(function(ok) {
-    clearTimeout(_t);
-    setLoad(100, ok ? 'Berhasil!' : 'Mode offline');
-    _showApp();
-  });
+  callGAS('initLoad', null,
+    function(res) {
+      clearTimeout(_t);
+      _applyServerData(res);
+      setLoad(100, (res && res.success) ? 'Berhasil!' : 'Gagal');
+      _showApp();
+    },
+    function() {
+      clearTimeout(_t);
+      setLoad(100, 'Gagal koneksi ke server');
+      document.getElementById('loadSkip').style.display = 'block';
+      _showApp();
+    }
+  );
 });
 
 function _syncGASBackground() {
