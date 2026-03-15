@@ -698,22 +698,58 @@ function _resizeFotoToBase64(file, callback) {
   reader.readAsDataURL(file);
 }
 
-/** Simpan foto ke D.users + localStorage + server via syncServer */
+/** Simpan foto ke Photos sheet di server + localStorage terpisah */
 function _saveFotoToServer(userId, b64, onDone) {
   // 1. Update D di memory
   var idx = D.users.findIndex(function(u){return u.id===userId;});
   if(idx>=0) D.users[idx].foto = b64;
   if(ME && ME.id===userId) ME.foto = b64;
-  // 2. Simpan foto ke localStorage terpisah agar tidak QuotaExceededError
+  // 2. Simpan foto ke localStorage terpisah
   saveFotoLocal(userId, b64);
   saveLocal();
-  // 3. Kirim ke server via syncServer (syncData → _syncPhotos → Photos sheet)
-  //    Lebih reliable daripada saveProfilePhoto terpisah
-  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    syncServer(function(res) { if(onDone) onDone(res && res.success !== false); });
-  } else {
+
+  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     if(onDone) onDone(true);
+    return;
   }
+
+  // 3. Kirim langsung ke saveProfilePhoto (payload kecil, hanya 1 foto)
+  console.log('[FOTO] Mengirim foto userId:', userId, '| ukuran b64:', b64.length, 'chars');
+  toast('Menyimpan foto ke server...', 'i');
+
+  callGASPost('saveProfilePhoto', [userId, b64], function(r) {
+    console.log('[FOTO] Response saveProfilePhoto:', r);
+    if (r && r.success) {
+      toast('Foto berhasil disimpan ke server ✓', 's');
+      if(onDone) onDone(true);
+    } else {
+      // Gagal saveProfilePhoto → fallback: coba lewat syncServer
+      console.warn('[FOTO] saveProfilePhoto gagal, coba syncServer sebagai backup...');
+      toast('Menyimpan foto via sync...', 'i');
+      syncServer(function(res2) {
+        if(res2 && res2.success) {
+          toast('Foto tersimpan via sync ✓', 's');
+          if(onDone) onDone(true);
+        } else {
+          toast('Foto tersimpan lokal (sync gagal, akan coba saat logout)', 'i');
+          if(onDone) onDone(false);
+        }
+      });
+    }
+  }, function(err) {
+    console.warn('[FOTO] callGASPost saveProfilePhoto error:', err);
+    // Fallback: coba lewat syncServer
+    toast('Menyimpan foto via sync...', 'i');
+    syncServer(function(res2) {
+      if(res2 && res2.success) {
+        toast('Foto tersimpan via sync ✓', 's');
+        if(onDone) onDone(true);
+      } else {
+        toast('Foto tersimpan lokal saja', 'i');
+        if(onDone) onDone(false);
+      }
+    });
+  });
 }
 
 /** Hapus foto dari D.users + localStorage + server */
@@ -6225,6 +6261,37 @@ window.debugSINMA = function() {
 
 // Shortcut
 window.debug = window.debugSINMA;
+
+// =====================================================================
+// DEBUG FOTO — ketik testFoto() di console browser untuk test
+// =====================================================================
+window.testFoto = function() {
+  console.log('=== TEST FOTO SYNC ===');
+  // Cek apakah ada user dengan foto di D
+  var withFoto = (D.users||[]).filter(function(u){ return u.foto; });
+  var fromLS   = (D.users||[]).filter(function(u){ return !!getFotoLocal(u.id); });
+  console.log('Users dgn foto di D.users:', withFoto.length);
+  console.log('Users dgn foto di localStorage:', fromLS.length);
+  withFoto.forEach(function(u){ console.log('  -', u.nama_lengkap, '| foto size:', u.foto.length, 'chars'); });
+
+  if(withFoto.length === 0) {
+    console.warn('Tidak ada foto di D.users. Coba upload foto dulu.');
+    return;
+  }
+
+  // Test kirim 1 foto ke server
+  var u = withFoto[0];
+  console.log('Test kirim foto user:', u.nama_lengkap, u.id);
+  callGASPost('saveProfilePhoto', [u.id, u.foto], function(r) {
+    console.log('✅ saveProfilePhoto response:', r);
+    if(r && r.success) { alert('BERHASIL! Foto ' + u.nama_lengkap + ' masuk ke Photos sheet.'); }
+    else { alert('GAGAL: ' + (r&&r.message||'unknown')); }
+  }, function(err) {
+    console.error('❌ saveProfilePhoto error:', err);
+    alert('ERROR: ' + (err&&err.message||String(err)));
+  });
+};
+console.log('💡 Ketik testFoto() di console untuk test simpan foto ke server');
 
 
 // =====================================================================
