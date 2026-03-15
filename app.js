@@ -144,6 +144,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
+  // Load data lokal dulu
   try {
     var ld = localStorage.getItem('sinmaData');
     var lc = localStorage.getItem('sinmaCfg');
@@ -160,76 +161,76 @@ document.addEventListener('DOMContentLoaded', function() {
     initApp();
   }
 
-  function _showErr(msg) {
-    setLoad(100, 'Gagal');
-    var errBox = document.getElementById('loadErrBox');
-    var errMsg = document.getElementById('loadErrMsg');
-    var skip   = document.getElementById('loadSkip');
-    if (errBox) errBox.style.display = 'block';
-    if (errMsg) errMsg.textContent = msg;
-    if (skip)   skip.style.display = 'block';
+  function _fetchServer(onDone) {
+    fetch(GAS_URL + '?fn=initLoad', { method:'GET', mode:'cors', redirect:'follow' })
+      .then(function(r){ return r.json(); })
+      .then(function(res) {
+        if (res && res.success && res.data) {
+          var localFdMap = {};
+          if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
+          D = res.data; CFG = res.cfg || CFG;
+          D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
+          // Update ME jika sudah login
+          if (ME && ME.id) {
+            var fresh = D.users.find(function(u){ return u.id === ME.id; });
+            if (fresh) { ME.foto = fresh.foto || ME.foto; }
+          }
+          saveLocal();
+          localStorage.setItem('sinmaLastSync', Date.now().toString());
+        }
+        if (onDone) onDone(true);
+      })
+      .catch(function() { if (onDone) onDone(false); });
   }
 
-  // Ada data lokal → tampil langsung
   if (hasLocal) {
+    // Tampil login langsung dari lokal
     setLoad(100, 'Siap!');
     _showApp();
-    _syncGASBackground();
+    // Fetch server di background — update D & localStorage dengan data terbaru
+    _fetchServer(null);
     return;
   }
 
-  // Belum ada data → fetch server
+  // Belum ada data sama sekali — harus tunggu server
   setLoad(20, 'Menghubungi server...');
-
-  var _fetchTimeout = setTimeout(function() {
-    _showErr('Server tidak merespons (timeout 10 detik). Klik Lanjutkan.');
-    setTimeout(_showApp, 300);
+  var _t = setTimeout(function() {
+    var s = document.getElementById('loadSkip');
+    var b = document.getElementById('loadErrBox');
+    var m = document.getElementById('loadErrMsg');
+    if(s) s.style.display='block';
+    if(b) b.style.display='block';
+    if(m) m.textContent='Server lambat. Klik Lanjutkan.';
+    _showApp();
   }, 10000);
 
-  fetch(GAS_URL + '?fn=initLoad', { method:'GET', mode:'cors', redirect:'follow' })
-    .then(function(r) {
-      setLoad(70, 'Memproses data...');
-      return r.json();
-    })
-    .then(function(res) {
-      clearTimeout(_fetchTimeout);
-      if (res && res.success && res.data) {
-        setLoad(100, 'Berhasil! ' + (res.data.users||[]).length + ' user dimuat');
-        D = res.data; CFG = res.cfg || CFG;
-        saveLocal();
-        localStorage.setItem('sinmaLastSync', Date.now().toString());
-        setTimeout(_showApp, 400);
-      } else {
-        _showErr('Server error: ' + (res && res.message || 'unknown'));
-        setTimeout(_showApp, 300);
-      }
-    })
-    .catch(function(err) {
-      clearTimeout(_fetchTimeout);
-      _showErr('CORS/Network error: ' + err.message + ' — Cek console F12');
-      setTimeout(_showApp, 300);
-    });
+  _fetchServer(function(ok) {
+    clearTimeout(_t);
+    setLoad(100, ok ? 'Berhasil!' : 'Mode offline');
+    _showApp();
+  });
 });
 
-// Sync data dari server di background setelah login
-// Dipanggil dari afterLogin() agar tidak lambatkan loading awal
 function _syncGASBackground() {
+  // Gunakan fetch langsung - _fetchServer ada di dalam DOMContentLoaded scope
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
-  callGAS('initLoad', null, function(res) {
-    if (res && res.success && res.data) {
-      var localFdMap = {};
-      if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
-      // Preserve foto yang sudah ada di D (dari Photos sheet)
-      var localFotoMap = {};
-      if(D && D.users) D.users.forEach(function(u){ if(u.foto) localFotoMap[u.id] = u.foto; });
-      D = res.data; CFG = res.cfg || CFG;
-      D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
-      // Gabung foto dari server + foto lokal
-      D.users.forEach(function(u){ if(!u.foto && localFotoMap[u.id]) u.foto = localFotoMap[u.id]; });
-      saveLocal();
-      localStorage.setItem('sinmaLastSync', Date.now().toString());
-    }
-  }, function(){});
+  fetch(GAS_URL + '?fn=initLoad', { method:'GET', mode:'cors', redirect:'follow' })
+    .then(function(r){ return r.json(); })
+    .then(function(res) {
+      if (res && res.success && res.data) {
+        var localFdMap = {};
+        if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
+        D = res.data; CFG = res.cfg || CFG;
+        D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
+        if (ME && ME.id) {
+          var fresh = D.users.find(function(u){ return u.id === ME.id; });
+          if (fresh) ME.foto = fresh.foto || ME.foto;
+        }
+        saveLocal();
+        localStorage.setItem('sinmaLastSync', Date.now().toString());
+      }
+    })
+    .catch(function(){});
 }
 
 function initApp() {
