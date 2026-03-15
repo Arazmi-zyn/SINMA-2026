@@ -292,41 +292,44 @@ function restoreFotoFromLocal() {
 
 function saveLocal() {
   try {
-    // FIX: Simpan foto TERPISAH per user agar tidak QuotaExceededError
-    // Foto base64 ~150KB/user, jika digabung dengan sinmaData bisa > batas 5MB localStorage
-    // Foto disimpan di key sinma_foto_{userId}, sinmaData disimpan TANPA foto
+    // Simpan foto ke key terpisah terlebih dahulu
     if (D && D.users) {
       D.users.forEach(function(u) {
         if (u.foto) saveFotoLocal(u.id, u.foto);
       });
     }
-    // Simpan D tanpa foto ke sinmaData (hemat kuota localStorage)
-    var dataToSave = JSON.parse(JSON.stringify(D));
-    if (dataToSave.users) {
-      dataToSave.users = dataToSave.users.map(function(u) {
-        var u2 = Object.assign({}, u);
-        delete u2.foto;
-        return u2;
-      });
-    }
-    localStorage.setItem('sinmaData', JSON.stringify(dataToSave));
+    // Simpan D ke sinmaData TANPA foto menggunakan JSON replacer
+    // (lebih efisien dari JSON.parse(JSON.stringify(D)) yang bisa gagal karena ukuran)
+    var json = JSON.stringify(D, function(key, value) {
+      if (key === 'foto') return undefined; // skip foto
+      return value;
+    });
+    localStorage.setItem('sinmaData', json);
     localStorage.setItem('sinmaCfg', JSON.stringify(CFG));
   } catch(e) { console.warn('saveLocal error:', e); }
 }
 
 function syncServer(onDone) {
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
+  // Pastikan foto dari localStorage terpisah sudah ada di D sebelum kirim
   restoreFotoFromLocal();
-  var payload = JSON.stringify({ data: D, cfg: CFG });
-  callGASPost('syncData', payload, function(res) {
+  // Log berapa user yang punya foto sebelum kirim
+  var fotoUsers = (D.users||[]).filter(function(u){ return u.foto && u.foto.length > 10; });
+  console.log('[SYNC] Kirim ke server | users:', (D.users||[]).length, '| user dgn foto:', fotoUsers.length);
+  fotoUsers.forEach(function(u){ console.log('  - foto:', u.id, u.nama_lengkap, '| size:', u.foto.length); });
+
+  var payload = JSON.stringify(D, function(k,v){ return v; }); // kirim DENGAN foto
+  var fullPayload = JSON.stringify({ data: JSON.parse(payload), cfg: CFG });
+
+  callGASPost('syncData', fullPayload, function(res) {
     if (res && res.success) {
-      console.log('syncServer OK - foto tersimpan:', (res.fotoCount || 0), '| total users:', (D.users||[]).length);
+      console.log('[SYNC] OK - fotoCount dari server:', res.fotoCount);
     } else {
-      console.warn('syncServer gagal:', res && res.message);
+      console.warn('[SYNC] Gagal:', res && res.message);
     }
     if (onDone) onDone(res);
   }, function(e) {
-    console.warn('syncServer error:', e);
+    console.warn('[SYNC] Error:', e);
     if (onDone) onDone(null);
   });
 }
