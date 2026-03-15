@@ -223,17 +223,11 @@ function _syncGASBackground() {
     if (res && res.success && res.data) {
       var localFdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
-
       D = res.data; CFG = res.cfg || CFG;
-
       D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
-
-      // FIX: Restore foto dari localStorage terpisah (sinma_foto_{userId})
-      restoreFotoFromLocal();
-
       saveLocal();
     }
-  }, function(){/* silent fail - pakai data lokal */});
+  }, function(){});
 }
 
 function initApp() {
@@ -292,50 +286,54 @@ function restoreFotoFromLocal() {
 
 function saveLocal() {
   try {
-    // Simpan foto ke key terpisah terlebih dahulu
-    if (D && D.users) {
-      D.users.forEach(function(u) {
-        if (u.foto) saveFotoLocal(u.id, u.foto);
-      });
-    }
-    // Simpan D ke sinmaData TANPA foto menggunakan JSON replacer
-    // (lebih efisien dari JSON.parse(JSON.stringify(D)) yang bisa gagal karena ukuran)
-    var json = JSON.stringify(D, function(key, value) {
-      if (key === 'foto') return undefined; // skip foto
-      return value;
-    });
-    localStorage.setItem('sinmaData', json);
+    localStorage.setItem('sinmaData', JSON.stringify(D));
     localStorage.setItem('sinmaCfg', JSON.stringify(CFG));
-  } catch(e) { console.warn('saveLocal error:', e); }
+  } catch(e) {
+    // Jika QuotaExceeded karena foto, simpan tanpa foto
+    try {
+      var d2 = JSON.stringify(D, function(k,v){ return k==='foto' ? undefined : v; });
+      localStorage.setItem('sinmaData', d2);
+      localStorage.setItem('sinmaCfg', JSON.stringify(CFG));
+    } catch(e2) { console.warn('saveLocal error:', e2); }
+  }
 }
 
 function syncServer(onDone) {
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
-  // Pastikan foto dari localStorage terpisah sudah ada di D sebelum kirim
-  restoreFotoFromLocal();
-  // Log berapa user yang punya foto sebelum kirim
-  var fotoUsers = (D.users||[]).filter(function(u){ return u.foto && u.foto.length > 10; });
-  console.log('[SYNC] Kirim ke server | users:', (D.users||[]).length, '| user dgn foto:', fotoUsers.length);
-  fotoUsers.forEach(function(u){ console.log('  - foto:', u.id, u.nama_lengkap, '| size:', u.foto.length); });
-
-  var payload = JSON.stringify(D, function(k,v){ return v; }); // kirim DENGAN foto
-  var fullPayload = JSON.stringify({ data: JSON.parse(payload), cfg: CFG });
-
-  callGASPost('syncData', fullPayload, function(res) {
-    if (res && res.success) {
-      console.log('[SYNC] OK - fotoCount dari server:', res.fotoCount);
-    } else {
-      console.warn('[SYNC] Gagal:', res && res.message);
-    }
+  var payload = JSON.stringify({ data: D, cfg: CFG });
+  callGASPost('syncData', payload, function(res) {
     if (onDone) onDone(res);
   }, function(e) {
-    console.warn('[SYNC] Error:', e);
     if (onDone) onDone(null);
   });
 }
 
 
-function uniqueArr(arr) {
+// Load foto dari server via POST terpisah (tidak ikut initLoad agar tidak timeout)
+function loadPhotosFromServer() {
+  if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
+  callGASPost('loadPhotos', null, function(res) {
+    if (res && res.success && res.photos) {
+      var count = 0;
+      Object.keys(res.photos).forEach(function(uid) {
+        var b64 = res.photos[uid];
+        if (!b64) return;
+        // Update D.users
+        var idx = (D.users||[]).findIndex(function(u){ return u.id === uid; });
+        if (idx >= 0) D.users[idx].foto = b64;
+        // Update ME jika ini user yang login
+        if (ME && ME.id === uid) ME.foto = b64;
+        // Simpan ke localStorage terpisah
+        saveFotoLocal(uid, b64);
+        count++;
+      });
+      console.log('[FOTO] Dimuat dari server:', count, 'foto');
+      if (count > 0) saveLocal();
+    }
+  }, function(e) {
+    console.warn('[FOTO] loadPhotos gagal, pakai lokal:', e);
+  });
+}
   var seen = {}, out = [];
   arr.forEach(function(v){ if(v!==undefined&&v!==null&&!seen[v]){ seen[v]=1; out.push(v); } });
   return out;
@@ -420,15 +418,12 @@ function doLogin(e) {
 }
 
 function afterLogin() {
-  // Selalu sync ME dengan data terbaru dari D.users (pastikan password, foto, wali_kelas_id ada)
   var freshUser = D.users.find(function(u) { return u.id === ME.id || u.username === ME.username; });
   if (freshUser) {
     if (!ME.password && freshUser.password) ME.password = freshUser.password;
-    // Selalu ambil foto dan wali_kelas_id terbaru dari freshUser
     if (freshUser.foto) ME.foto = freshUser.foto;
     if (freshUser.wali_kelas_id) ME.wali_kelas_id = freshUser.wali_kelas_id;
   }
-
   document.getElementById('loginS').classList.add('hidden');
   if (ME.role === 'admin') {
     document.getElementById('adminD').classList.remove('hidden');
@@ -438,7 +433,6 @@ function afterLogin() {
   } else if (ME.role === 'guru') {
     document.getElementById('guruD').classList.remove('hidden');
     document.getElementById('grName').textContent = ME.nama_lengkap || ME.username;
-    // Apply CFG to guru dashboard
     ['grSbLogo','grSbLogoMob'].forEach(function(id) {
       var el = document.getElementById(id); if(!el) return;
       el.innerHTML = CFG.logoImg ? '<img src="'+CFG.logoImg+'" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">' : '<i class="'+(CFG.logoIcon||'fa-solid fa-graduation-cap')+'"></i>';
@@ -701,68 +695,40 @@ function _resizeFotoToBase64(file, callback) {
 }
 
 /** Simpan foto ke Photos sheet di server + localStorage terpisah */
+/** Simpan foto LANGSUNG ke Photos sheet di server */
 function _saveFotoToServer(userId, b64, onDone) {
-  // 1. Update D di memory
-  var idx = D.users.findIndex(function(u){return u.id===userId;});
+  // Update D di memory agar langsung tampil
+  var idx = D.users.findIndex(function(u){ return u.id===userId; });
   if(idx>=0) D.users[idx].foto = b64;
   if(ME && ME.id===userId) ME.foto = b64;
-  // 2. Simpan foto ke localStorage terpisah
-  saveFotoLocal(userId, b64);
-  saveLocal();
 
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     if(onDone) onDone(true);
     return;
   }
-
-  // 3. Kirim langsung ke saveProfilePhoto (payload kecil, hanya 1 foto)
-  console.log('[FOTO] Mengirim foto userId:', userId, '| ukuran b64:', b64.length, 'chars');
-  toast('Menyimpan foto ke server...', 'i');
-
+  // Kirim langsung ke Photos sheet — tidak perlu localStorage
+  toast('Menyimpan foto...', 'i');
   callGASPost('saveProfilePhoto', [userId, b64], function(r) {
-    console.log('[FOTO] Response saveProfilePhoto:', r);
     if (r && r.success) {
-      toast('Foto berhasil disimpan ke server ✓', 's');
+      toast('Foto berhasil disimpan ✓', 's');
       if(onDone) onDone(true);
     } else {
-      // Gagal saveProfilePhoto → fallback: coba lewat syncServer
-      console.warn('[FOTO] saveProfilePhoto gagal, coba syncServer sebagai backup...');
-      toast('Menyimpan foto via sync...', 'i');
-      syncServer(function(res2) {
-        if(res2 && res2.success) {
-          toast('Foto tersimpan via sync ✓', 's');
-          if(onDone) onDone(true);
-        } else {
-          toast('Foto tersimpan lokal (sync gagal, akan coba saat logout)', 'i');
-          if(onDone) onDone(false);
-        }
-      });
+      toast('Gagal simpan foto: ' + (r&&r.message||''), 'e');
+      if(onDone) onDone(false);
     }
   }, function(err) {
-    console.warn('[FOTO] callGASPost saveProfilePhoto error:', err);
-    // Fallback: coba lewat syncServer
-    toast('Menyimpan foto via sync...', 'i');
-    syncServer(function(res2) {
-      if(res2 && res2.success) {
-        toast('Foto tersimpan via sync ✓', 's');
-        if(onDone) onDone(true);
-      } else {
-        toast('Foto tersimpan lokal saja', 'i');
-        if(onDone) onDone(false);
-      }
-    });
+    toast('Error koneksi saat simpan foto', 'e');
+    if(onDone) onDone(false);
   });
 }
 
-/** Hapus foto dari D.users + localStorage + server */
+/** Hapus foto dari Photos sheet */
 function _removeFotoFromServer(userId, onDone) {
-  var idx = D.users.findIndex(function(u){return u.id===userId;});
+  var idx = D.users.findIndex(function(u){ return u.id===userId; });
   if(idx>=0) D.users[idx].foto = '';
   if(ME && ME.id===userId) ME.foto = '';
-  removeFotoLocal(userId);
-  saveLocal();
   if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    syncServer(function() { if(onDone) onDone(); });
+    callGAS('removeProfilePhoto', [userId], function(){ if(onDone) onDone(); }, function(){ if(onDone) onDone(); });
   } else {
     if(onDone) onDone();
   }
