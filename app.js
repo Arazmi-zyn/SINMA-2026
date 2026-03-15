@@ -316,18 +316,17 @@ function saveLocal() {
 
 function syncServer(onDone) {
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
-  // Pastikan foto terbaru dari localStorage terpisah sudah ada di D.users sebelum dikirim
   restoreFotoFromLocal();
   var payload = JSON.stringify({ data: D, cfg: CFG });
   callGASPost('syncData', payload, function(res) {
     if (res && res.success) {
-      console.log('syncServer OK - data + foto tersimpan ke Sheet');
+      console.log('syncServer OK - foto tersimpan:', (res.fotoCount || 0), '| total users:', (D.users||[]).length);
     } else {
-      console.warn('syncServer: server merespons gagal', res && res.message);
+      console.warn('syncServer gagal:', res && res.message);
     }
     if (onDone) onDone(res);
   }, function(e) {
-    console.warn('syncServer failed:', e);
+    console.warn('syncServer error:', e);
     if (onDone) onDone(null);
   });
 }
