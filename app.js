@@ -6263,11 +6263,22 @@ window.debugSINMA = function() {
 window.debug = window.debugSINMA;
 
 // =====================================================================
-// DEBUG FOTO — ketik testFoto() di console browser untuk test
+// DEBUG TOOLS — ketik di console browser
 // =====================================================================
+
+// Cek versi Code.gs yang aktif di server
+window.checkVersion = function() {
+  callGAS('ping', null, function(r) {
+    console.log('✅ Server version:', r && r.v);
+    alert('Versi Code.gs aktif: ' + (r && r.v) + '\nHarus 2.3.0 — jika berbeda, deploy ulang!');
+  }, function(e) {
+    console.error('❌ Server tidak merespons:', e);
+    alert('Server tidak merespons. Cek GAS_URL.');
+  });
+};
+
 window.testFoto = function() {
   console.log('=== TEST FOTO SYNC ===');
-  // Cek apakah ada user dengan foto di D
   var withFoto = (D.users||[]).filter(function(u){ return u.foto; });
   var fromLS   = (D.users||[]).filter(function(u){ return !!getFotoLocal(u.id); });
   console.log('Users dgn foto di D.users:', withFoto.length);
@@ -6279,7 +6290,6 @@ window.testFoto = function() {
     return;
   }
 
-  // Test kirim 1 foto ke server
   var u = withFoto[0];
   console.log('Test kirim foto user:', u.nama_lengkap, u.id);
   callGASPost('saveProfilePhoto', [u.id, u.foto], function(r) {
@@ -6291,7 +6301,8 @@ window.testFoto = function() {
     alert('ERROR: ' + (err&&err.message||String(err)));
   });
 };
-console.log('💡 Ketik testFoto() di console untuk test simpan foto ke server');
+
+console.log('💡 Ketik checkVersion() untuk cek versi server, testFoto() untuk test simpan foto ke server');
 
 
 // =====================================================================
