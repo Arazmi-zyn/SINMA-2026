@@ -138,13 +138,13 @@ function loadXLSX(cb){
   document.head.appendChild(s);
 }
 
-// ===== MAIN INIT — SELALU INSTAN =====
+// ===== MAIN INIT =====
 document.addEventListener('DOMContentLoaded', function() {
   (function(){var t=localStorage.getItem('sinma_theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');})();
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
-  // Load data lokal (0ms - instan)
+  // Load data lokal dulu (instan)
   try {
     var ld = localStorage.getItem('sinmaData');
     var lc = localStorage.getItem('sinmaCfg');
@@ -152,9 +152,46 @@ document.addEventListener('DOMContentLoaded', function() {
     if (lc) CFG = JSON.parse(lc);
   } catch(e) {}
 
-  // SELALU tampil login langsung — tidak pernah tunggu server saat loading
-  setLoad(100, 'Siap!');
-  if (!_appInit) { _appInit = true; initApp(); }
+  var hasLocal = !!(D.users && D.users.length > 0);
+
+  function _showApp() {
+    if (_appInit) return;
+    _appInit = true;
+    if (window._loadFallback) clearTimeout(window._loadFallback);
+    initApp();
+  }
+
+  // Jika ada data lokal → tampil langsung, sync di background
+  if (hasLocal) {
+    setLoad(100, 'Siap!');
+    _showApp();
+    _syncGASBackground();
+    return;
+  }
+
+  // Belum ada data lokal → fetch dari server
+  setLoad(20, 'Mengambil data...');
+
+  // Timeout 5 detik → tampil login meski data belum ada
+  var _fetchTimeout = setTimeout(function() {
+    setLoad(100, 'Lanjut tanpa data...');
+    _showApp();
+  }, 5000);
+
+  callGAS('initLoad', null, function(res) {
+    clearTimeout(_fetchTimeout);
+    if (res && res.success && res.data) {
+      D = res.data; CFG = res.cfg || CFG;
+      saveLocal();
+      localStorage.setItem('sinmaLastSync', Date.now().toString());
+    }
+    setLoad(100, 'Siap!');
+    _showApp();
+  }, function() {
+    clearTimeout(_fetchTimeout);
+    setLoad(100, 'Mode offline');
+    _showApp();
+  });
 });
 
 // Sync data dari server di background setelah login
@@ -326,6 +363,8 @@ function setLoginLoading(on) {
 // =====================================================================
 // AUTH
 // =====================================================================
+// AUTH
+// =====================================================================
 function doLogin(e) {
   e.preventDefault();
   var u = document.getElementById('lu').value.trim();
@@ -334,57 +373,39 @@ function doLogin(e) {
   err.style.display = 'none';
   setLoginLoading(true);
 
-  // Jika belum ada data lokal sama sekali, fetch dari server dulu
-  var hasUsers = D.users && D.users.length > 0;
-  if (!hasUsers && GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    // Langsung login ke server (verifikasi + ambil data sekaligus)
-    callGAS('login', [u, p], function(r) {
-      if (r && r.success) {
-        ME = r.user;
-        // Ambil semua data dari server
-        callGAS('initLoad', null, function(res) {
-          setLoginLoading(false);
-          if (res && res.success && res.data) {
-            D = res.data; CFG = res.cfg || CFG;
-            saveLocal();
-            localStorage.setItem('sinmaLastSync', Date.now().toString());
-          }
-          afterLogin();
-        }, function() {
-          setLoginLoading(false);
-          afterLogin();
-        });
-      } else {
-        setLoginLoading(false);
-        err.style.display = 'block';
-      }
-    }, function() {
-      setLoginLoading(false);
-      err.style.display = 'block';
-    });
-    return;
-  }
-
-  // Ada data lokal — login lokal (cepat), verifikasi ke server paralel
-  var found = D.users.find(function(x) { return x.username === u && x.password === p; });
+  // Cari di data lokal dulu (cepat)
+  var found = (D.users||[]).find(function(x) { return x.username === u && x.password === p; });
   if (found) {
     setLoginLoading(false);
     ME = found;
     afterLogin();
-  } else if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    // Tidak ada di lokal — coba server
+    return;
+  }
+
+  // Tidak ada di lokal → verifikasi ke server
+  if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
     callGAS('login', [u, p], function(r) {
-      setLoginLoading(false);
       if (r && r.success) {
         ME = r.user;
-        var localUser = D.users.find(function(x) { return x.id === ME.id || x.username === ME.username; });
-        if (localUser) {
-          if (!ME.password && localUser.password) ME.password = localUser.password;
-          if (localUser.foto) ME.foto = localUser.foto;
-          if (localUser.wali_kelas_id) ME.wali_kelas_id = localUser.wali_kelas_id;
+        // Jika D masih kosong, fetch data dulu
+        if (!D.users || D.users.length === 0) {
+          callGAS('initLoad', null, function(res) {
+            setLoginLoading(false);
+            if (res && res.success && res.data) {
+              D = res.data; CFG = res.cfg || CFG;
+              saveLocal();
+              localStorage.setItem('sinmaLastSync', Date.now().toString());
+            }
+            afterLogin();
+          }, function() { setLoginLoading(false); afterLogin(); });
+        } else {
+          setLoginLoading(false);
+          afterLogin();
         }
-        afterLogin();
-      } else { err.style.display = 'block'; }
+      } else {
+        setLoginLoading(false);
+        err.style.display = 'block';
+      }
     }, function() {
       setLoginLoading(false);
       err.style.display = 'block';
