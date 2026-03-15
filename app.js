@@ -179,6 +179,7 @@ function _syncGASBackground() {
 }
 
 function initApp() {
+  if (window._loadFallback) clearTimeout(window._loadFallback);
   var ls = document.getElementById('loadingS');
   if (ls) {
     ls.style.opacity = '0';
