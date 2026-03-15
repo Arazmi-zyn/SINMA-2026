@@ -153,6 +153,9 @@ document.addEventListener('DOMContentLoaded', function() {
     var lc = localStorage.getItem('sinmaCfg');
     if (ld) D = JSON.parse(ld);
     if (lc) CFG = JSON.parse(lc);
+    // FIX: Restore foto dari localStorage terpisah (sinma_foto_{userId})
+    // karena foto tidak lagi disimpan di dalam sinmaData untuk mencegah QuotaExceededError
+    restoreFotoFromLocal();
   } catch(e) {}
 
   // Kalau sudah ada data lokal → tampilkan login SEKARANG, sync GAS di background
@@ -195,13 +198,10 @@ document.addEventListener('DOMContentLoaded', function() {
       setStep(2, 'done');
       var localFdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
-      // FIX: Preserve foto lokal sebelum ditimpa data server
-      var localFotoMap = {};
-      if(D && D.users) D.users.forEach(function(u){ if(u.foto) localFotoMap[u.id] = u.foto; });
       D = res.data; CFG = res.cfg || CFG;
       D.submissions.forEach(function(s) { if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
-      // FIX: Restore foto lokal jika server belum punya
-      D.users.forEach(function(u){ if(!u.foto && localFotoMap[u.id]) u.foto = localFotoMap[u.id]; });
+      // FIX: Restore foto dari localStorage terpisah (sinma_foto_{userId})
+      restoreFotoFromLocal();
       saveLocal();
     } else {
       setStep(2, 'error');
@@ -221,22 +221,15 @@ document.addEventListener('DOMContentLoaded', function() {
 function _syncGASBackground() {
   callGAS('initLoad', null, function(res) {
     if (res && res.success && res.data) {
-      // Simpan fileDataUrl submissions yang hanya ada di lokal
       var localFdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) localFdMap[s.id] = s.fileDataUrl; });
 
-      // FIX: Simpan foto users yang hanya ada di lokal (server mungkin belum punya)
-      // Tanpa ini, background sync akan menimpa D.users dengan data server yang fotonya kosong
-      var localFotoMap = {};
-      if(D && D.users) D.users.forEach(function(u){ if(u.foto) localFotoMap[u.id] = u.foto; });
-
       D = res.data; CFG = res.cfg || CFG;
 
-      // Restore fileDataUrl yang hanya ada di lokal
       D.submissions.forEach(function(s){ if(!s.fileDataUrl && localFdMap[s.id]) s.fileDataUrl = localFdMap[s.id]; });
 
-      // FIX: Restore foto yang hanya ada di lokal (server belum tersync)
-      D.users.forEach(function(u){ if(!u.foto && localFotoMap[u.id]) u.foto = localFotoMap[u.id]; });
+      // FIX: Restore foto dari localStorage terpisah (sinma_foto_{userId})
+      restoreFotoFromLocal();
 
       saveLocal();
     }
@@ -273,21 +266,62 @@ function applyCFG() {
   if(g2) g2.value = CFG.bobotUjian || 30;
 }
 
+// =====================================================================
+// FOTO LOCAL STORAGE - Pisah dari sinmaData agar tidak QuotaExceededError
+// Foto base64 ~150KB per user, jika digabung bisa > 5MB limit localStorage
+// =====================================================================
+function saveFotoLocal(userId, b64) {
+  try { localStorage.setItem('sinma_foto_' + userId, b64 || ''); } catch(e) {}
+}
+function getFotoLocal(userId) {
+  return localStorage.getItem('sinma_foto_' + userId) || '';
+}
+function removeFotoLocal(userId) {
+  try { localStorage.removeItem('sinma_foto_' + userId); } catch(e) {}
+}
+// Restore semua foto dari localStorage ke D.users
+function restoreFotoFromLocal() {
+  if (!D || !D.users) return;
+  D.users.forEach(function(u) {
+    if (!u.foto) {
+      var f = getFotoLocal(u.id);
+      if (f) u.foto = f;
+    }
+  });
+}
+
 function saveLocal() {
   try {
-    localStorage.setItem('sinmaData', JSON.stringify(D));
+    // FIX: Simpan foto TERPISAH per user agar tidak QuotaExceededError
+    // Foto base64 ~150KB/user, jika digabung dengan sinmaData bisa > batas 5MB localStorage
+    // Foto disimpan di key sinma_foto_{userId}, sinmaData disimpan TANPA foto
+    if (D && D.users) {
+      D.users.forEach(function(u) {
+        if (u.foto) saveFotoLocal(u.id, u.foto);
+      });
+    }
+    // Simpan D tanpa foto ke sinmaData (hemat kuota localStorage)
+    var dataToSave = JSON.parse(JSON.stringify(D));
+    if (dataToSave.users) {
+      dataToSave.users = dataToSave.users.map(function(u) {
+        var u2 = Object.assign({}, u);
+        delete u2.foto;
+        return u2;
+      });
+    }
+    localStorage.setItem('sinmaData', JSON.stringify(dataToSave));
     localStorage.setItem('sinmaCfg', JSON.stringify(CFG));
-  } catch(e) {}
+  } catch(e) { console.warn('saveLocal error:', e); }
 }
 
 function syncServer(onDone) {
   if (!GAS_URL || GAS_URL === 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') return;
-  // FIX: Kirim sebagai JSON string agar Apps Script (doPost → syncData) dapat mem-parse dengan benar
-  // Sebelumnya dikirim sebagai Object → JSON.parse(object) = SyntaxError → data tidak tersimpan ke Sheet
+  // Pastikan foto terbaru dari localStorage terpisah sudah ada di D.users sebelum dikirim
+  restoreFotoFromLocal();
   var payload = JSON.stringify({ data: D, cfg: CFG });
   callGASPost('syncData', payload, function(res) {
     if (res && res.success) {
-      console.log('syncServer: data berhasil disimpan ke Sheet');
+      console.log('syncServer OK - data + foto tersimpan ke Sheet');
     } else {
       console.warn('syncServer: server merespons gagal', res && res.message);
     }
@@ -664,29 +698,33 @@ function _resizeFotoToBase64(file, callback) {
   reader.readAsDataURL(file);
 }
 
-/** Simpan foto ke Photos sheet di server + localStorage */
+/** Simpan foto ke D.users + localStorage + server via syncServer */
 function _saveFotoToServer(userId, b64, onDone) {
+  // 1. Update D di memory
   var idx = D.users.findIndex(function(u){return u.id===userId;});
   if(idx>=0) D.users[idx].foto = b64;
   if(ME && ME.id===userId) ME.foto = b64;
+  // 2. Simpan foto ke localStorage terpisah agar tidak QuotaExceededError
+  saveFotoLocal(userId, b64);
   saveLocal();
+  // 3. Kirim ke server via syncServer (syncData → _syncPhotos → Photos sheet)
+  //    Lebih reliable daripada saveProfilePhoto terpisah
   if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    // FIX: Kirim sebagai Array [userId, b64] agar doPost → _callFunction → saveProfilePhoto(p[0], p[1]) benar
-    // Sebelumnya dikirim sebagai Object {userId, b64} → p[0]={userId,b64}, p[1]=undefined → gagal diam-diam
-    callGASPost('saveProfilePhoto', [userId, b64], function(r){ if(onDone) onDone(r && r.success); }, function(){ if(onDone) onDone(false); });
+    syncServer(function(res) { if(onDone) onDone(res && res.success !== false); });
   } else {
     if(onDone) onDone(true);
   }
 }
 
-/** Hapus foto dari Photos sheet di server + localStorage */
+/** Hapus foto dari D.users + localStorage + server */
 function _removeFotoFromServer(userId, onDone) {
   var idx = D.users.findIndex(function(u){return u.id===userId;});
   if(idx>=0) D.users[idx].foto = '';
   if(ME && ME.id===userId) ME.foto = '';
+  removeFotoLocal(userId);
   saveLocal();
   if (GAS_URL && GAS_URL !== 'https://script.google.com/macros/s/AKfycbyv0vqKq8kgbMQk8YDrLBLMOjcjqgi2_DcPIKvnXXgnetg-VPwuBn493cBtv3ZXX4CV/exec') {
-    callGAS('removeProfilePhoto', [userId], function(){ if(onDone) onDone(); }, function(){ if(onDone) onDone(); });
+    syncServer(function() { if(onDone) onDone(); });
   } else {
     if(onDone) onDone();
   }
