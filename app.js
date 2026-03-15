@@ -89,7 +89,7 @@ function fixMobileGrids() {
 // =====================================================================
 // KONFIGURASI PWA - GANTI URL DI BAWAH INI DENGAN WEB APP URL ANDA
 // =====================================================================
-var GAS_URL = 'https://script.google.com/macros/s/AKfycbyesjQwIN7WnzDV-4czI1HVCdsO83YI1Ma9I5FLnZfISKDwl3xcFZq8JlPGsP1caJzJ/exec'; // <-- WAJIB DIISI
+var GAS_URL = 'https://script.google.com/macros/s/AKfycbw_r3TjMICKu5n8hHQaeug4RRH9qNwA4o8uguhn5_tH46w0Q35U8WSDCEbFD4bPEIvahQ/exec';
 
 /**
  * Helper fungsi pengganti google.script.run
