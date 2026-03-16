@@ -15,6 +15,7 @@ var _impRows = [];
 var _impData = [];
 var _assignGuruId = null; // for assign mapel modal
 var _curAbsenTS = null;   // current absence being edited
+var _pendingFotoSaves = {}; // {userId: b64} — foto yang menunggu disimpan ke server
 
 // =====================================================================
 // LOADING — PERBAIKAN UTAMA
@@ -111,22 +112,29 @@ function callGAS(fnName, params, onSuccess, onFailure) {
 }
 
 function callGASPost(fnName, body, onSuccess, onFailure) {
-  // POST langsung ke GAS_URL dengan Content-Type: text/plain
-  // agar browser tidak kirim preflight OPTIONS (GAS tidak support OPTIONS).
-  // redirect: 'follow' sudah cukup — fetch akan ikuti 302 redirect GAS secara otomatis
-  // dan response akhir tetap mengandung CORS header yang benar.
+  // POST ke GAS dengan Content-Type: text/plain
+  // (text/plain tidak trigger CORS preflight OPTIONS — GAS tidak support OPTIONS)
   var payload = JSON.stringify({ fn: fnName, data: body });
+  console.log('[POST]', fnName, 'payload size:', payload.length, 'bytes');
   fetch(GAS_URL, {
     method: 'POST',
     mode: 'cors',
     redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain' },
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: payload
   })
-  .then(function(resp) { return resp.json(); })
-  .then(function(data) { if (onSuccess) onSuccess(data); })
+  .then(function(resp) {
+    if (!resp.ok) {
+      throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+    }
+    return resp.json();
+  })
+  .then(function(data) {
+    console.log('[POST]', fnName, 'response:', data && data.success);
+    if (onSuccess) onSuccess(data);
+  })
   .catch(function(err) {
-    console.warn('callGASPost gagal:', err);
+    console.error('[POST]', fnName, 'GAGAL:', err.message || err);
     if (onFailure) onFailure(err);
   });
 }
@@ -284,17 +292,35 @@ function syncServer(onDone) {
     if (onDone) onDone(null);
     return;
   }
-  // PENTING: Strip base64 foto dari payload syncData.
-  // Foto disimpan terpisah via saveProfilePhoto (Photos sheet).
-  // Jika ikut sini, payload bisa >10MB → GAS timeout.
+
+  // Strip foto dari payload data biasa (foto dikirim via fotoUpdates jika ada pending)
   var safeD = JSON.parse(JSON.stringify(D, function(k, v) {
     return k === 'foto' ? undefined : v;
   }));
-  var payload = JSON.stringify({ data: safeD, cfg: CFG });
+
+  // Sertakan foto pending jika ada (foto yang baru diupload tapi belum tersimpan)
+  var fotoUpdates = [];
+  Object.keys(_pendingFotoSaves).forEach(function(uid) {
+    fotoUpdates.push({ userId: uid, b64: _pendingFotoSaves[uid] });
+  });
+
+  // payload ini akan dibungkus callGASPost menjadi { fn: 'syncData', data: payload }
+  // doPost akan membaca body.data, lalu _handleSyncData akan parse JSON-nya
+  var payload = JSON.stringify({
+    data: safeD,
+    cfg: CFG,
+    fotoUpdates: fotoUpdates
+  });
+
   callGASPost('syncData', payload,
     function(res) {
       if (res && res.success) {
-        console.log('[SYNC] OK, fotoCount:', res.fotoCount || 0);
+        if (fotoUpdates.length > 0) {
+          _pendingFotoSaves = {}; // clear queue setelah berhasil
+          console.log('[SYNC] OK + foto tersimpan:', res.fotoCount || 0);
+        } else {
+          console.log('[SYNC] OK');
+        }
       } else {
         console.warn('[SYNC] Respons tidak sukses:', res);
       }
@@ -720,40 +746,112 @@ function _resizeFotoToBase64(file, callback) {
   reader.readAsDataURL(file);
 }
 
-/** Simpan foto LANGSUNG ke Photos sheet di server */
+/** Simpan foto ke server melalui syncData (path yang sama dengan data lainnya) */
 function _saveFotoToServer(userId, b64, onDone) {
-  // Update memory agar langsung tampil di UI
+  // 1. Update memory SEGERA agar tampil di UI tanpa menunggu server
   var idx = D.users.findIndex(function(u){ return u.id===userId; });
   if(idx>=0) D.users[idx].foto = b64;
   if(ME && ME.id===userId) ME.foto = b64;
 
-  if (!GAS_URL) { if(onDone) onDone(true); return; }
+  // Update semua avatar yang mungkin ditampilkan
+  applyAvatarAdmin();
+  applyAvatarGuru();
+  applyAvatarStu();
 
+  if (!GAS_URL) {
+    toast('Foto disimpan (lokal saja — GAS belum dikonfigurasi)', 'i');
+    if(onDone) onDone(true);
+    return;
+  }
+
+  // 2. Masukkan ke queue pending foto
+  _pendingFotoSaves[userId] = b64;
+
+  // 3. Kirim ke server via syncFotoNow (endpoint yang sama dengan syncData)
   toast('Menyimpan foto ke server...', 'i');
-  callGASPost('saveProfilePhoto', [userId, b64], function(r) {
-    if (r && r.success) {
-      toast('Foto berhasil disimpan ✓', 's');
+  _syncFotoNow(function(ok) {
+    if(ok) {
+      toast('Foto berhasil disimpan ke Google Sheets ✓', 's');
       if(onDone) onDone(true);
     } else {
-      toast('Gagal simpan foto: ' + (r&&r.message||'error'), 'e');
+      toast('Gagal simpan foto ke server. Coba lagi.', 'e');
       if(onDone) onDone(false);
     }
-  }, function(err) {
-    toast('Error koneksi saat menyimpan foto', 'e');
-    if(onDone) onDone(false);
   });
+}
+
+/** Kirim foto pending ke server via endpoint syncData yang sudah terbukti bekerja */
+function _syncFotoNow(onDone) {
+  var fotoUpdates = [];
+  Object.keys(_pendingFotoSaves).forEach(function(uid) {
+    fotoUpdates.push({ userId: uid, b64: _pendingFotoSaves[uid] });
+  });
+
+  if (fotoUpdates.length === 0) {
+    if(onDone) onDone(true);
+    return;
+  }
+
+  // Strip foto dari data biasa, tapi sertakan fotoUpdates secara eksplisit
+  var safeD = JSON.parse(JSON.stringify(D, function(k, v) {
+    return k === 'foto' ? undefined : v;
+  }));
+
+  // PENTING: payload yang kita kirim ke callGASPost('syncData', payload)
+  // akan dibungkus oleh callGASPost menjadi: { fn: 'syncData', data: payload }
+  // Kemudian doPost membaca body.data → itulah payload kita
+  // Jadi fotoUpdates harus ada di dalam payload (bukan di luar)
+  var payload = JSON.stringify({
+    data: safeD,
+    cfg: CFG,
+    fotoUpdates: fotoUpdates
+  });
+
+  callGASPost('syncData', payload,
+    function(res) {
+      if (res && res.success) {
+        // Clear pending queue setelah berhasil
+        _pendingFotoSaves = {};
+        console.log('[FOTO] Tersimpan ke Photos sheet:', res.fotoCount || 0);
+        if(onDone) onDone(true);
+      } else {
+        console.warn('[FOTO] syncData gagal:', res);
+        if(onDone) onDone(false);
+      }
+    },
+    function(err) {
+      console.warn('[FOTO] _syncFotoNow error:', err);
+      if(onDone) onDone(false);
+    }
+  );
 }
 
 /** Hapus foto dari Photos sheet */
 function _removeFotoFromServer(userId, onDone) {
+  // Update memory dulu agar UI langsung responsif
   var idx = D.users.findIndex(function(u){ return u.id===userId; });
   if(idx>=0) D.users[idx].foto = '';
   if(ME && ME.id===userId) ME.foto = '';
-  if (GAS_URL) {
-    callGAS('removeProfilePhoto', [userId], function(){ if(onDone) onDone(); }, function(){ if(onDone) onDone(); });
-  } else {
+
+  // Update avatar
+  applyAvatarAdmin();
+  applyAvatarGuru();
+  applyAvatarStu();
+
+  // Hapus dari pending queue jika ada
+  delete _pendingFotoSaves[userId];
+
+  if (!GAS_URL) {
     if(onDone) onDone();
+    return;
   }
+
+  // Simpan perubahan (foto kosong) ke server via syncServer
+  // removeProfilePhoto via GET juga akan membersihkan Photos sheet
+  callGAS('removeProfilePhoto', [userId],
+    function(){ syncServer(function(){ if(onDone) onDone(); }); },
+    function(){ syncServer(function(){ if(onDone) onDone(); }); }
+  );
 }
 
 // =====================================================================
@@ -780,9 +878,7 @@ function onGrFotoChange(inp) {
   _resizeFotoToBase64(file, function(b64) {
     icon.style.display='none'; img.src=b64; img.style.display='block';
     applyAvatarGuru();
-    _saveFotoToServer(ME.id, b64, function(ok){
-      toast(ok ? 'Foto profil HD disimpan ✓' : 'Tersimpan lokal (offline)','s');
-    });
+    _saveFotoToServer(ME.id, b64, function(ok){});
   });
   inp.value='';
 }
@@ -851,9 +947,7 @@ function onStuFotoChange(inp) {
   _resizeFotoToBase64(file, function(b64) {
     icon.style.display='none'; img.src=b64; img.style.display='block';
     applyAvatarStu();
-    _saveFotoToServer(ME.id, b64, function(ok){
-      toast(ok ? 'Foto profil HD disimpan ✓' : 'Tersimpan lokal (offline)','s');
-    });
+    _saveFotoToServer(ME.id, b64, function(ok){});
   });
   inp.value='';
 }
@@ -6268,7 +6362,7 @@ window.testFoto = function() {
   var withFoto = (D.users||[]).filter(function(u){ return u.foto; });
   var fromLS   = (D.users||[]).filter(function(u){ return !!getFotoLocal(u.id); });
   console.log('Users dgn foto di D.users:', withFoto.length);
-  console.log('Users dgn foto di localStorage:', fromLS.length);
+  // localStorage foto removed - server-only approach
   withFoto.forEach(function(u){ console.log('  -', u.nama_lengkap, '| foto size:', u.foto.length, 'chars'); });
 
   if(withFoto.length === 0) {
