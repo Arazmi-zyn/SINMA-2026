@@ -338,25 +338,48 @@ function syncServer(onDone) {
 function loadPhotosFromServer() {
   if (!GAS_URL) return;
   callGAS('loadPhotos', null, function(res) {
-    if (res && res.success && res.photos) {
-      var count = 0;
-      Object.keys(res.photos).forEach(function(uid) {
-        var b64 = res.photos[uid];
-        if (!b64) return;
-        var idx2 = (D.users||[]).findIndex(function(u){ return u.id === uid; });
-        if (idx2 >= 0) D.users[idx2].foto = b64;
-        if (ME && ME.id === uid) {
-          ME.foto = b64;
-          applyAvatarAdmin();
-          applyAvatarGuru();
-          applyAvatarStu();
-        }
-        count++;
-      });
-      console.log('[FOTO] Dimuat dari server:', count, 'foto');
+    if (!res || !res.success) {
+      console.warn('[FOTO] loadPhotos gagal:', res);
+      return;
+    }
+    var photos = res.photos || {};
+    var count = Object.keys(photos).length;
+    if (count === 0) { console.log('[FOTO] Tidak ada foto di server'); return; }
+
+    // Update semua foto ke D.users di memory
+    Object.keys(photos).forEach(function(uid) {
+      var b64 = photos[uid];
+      if (!b64 || b64.length < 100) return;
+      var idx2 = (D.users||[]).findIndex(function(u){ return u.id === uid; });
+      if (idx2 >= 0) D.users[idx2].foto = b64;
+      if (ME && ME.id === uid) ME.foto = b64;
+    });
+
+    console.log('[FOTO] Dimuat dari server:', count, 'foto → update UI...');
+
+    // Update avatar header (pojok kanan atas) - selalu
+    applyAvatarAdmin();
+    applyAvatarGuru();
+    applyAvatarStu();
+
+    // Re-render komponen berdasarkan role yang sedang aktif
+    if (!ME) return;
+
+    if (ME.role === 'admin') {
+      try { rSiswa(); }  catch(e) {}  // tabel siswa + foto thumbnail
+      try { rGuru(); }   catch(e) {}  // tabel guru  + foto thumbnail
+    }
+
+    if (ME.role === 'guru') {
+      try { rGrSiswa(); } catch(e) {}  // tabel siswa saya + foto thumbnail
+      try { loadGrSet(); } catch(e) {} // halaman pengaturan guru + foto besar
+    }
+
+    if (ME.role === 'siswa') {
+      try { loadStuSet(); } catch(e) {} // halaman pengaturan siswa + foto besar
     }
   }, function(e) {
-    console.warn('[FOTO] loadPhotos gagal:', e);
+    console.warn('[FOTO] loadPhotosFromServer gagal:', e);
   });
 }
 
@@ -496,14 +519,18 @@ function afterLogin() {
     renderStuNilai();
     renderStuTugas();
   }
-  // Setelah dashboard tampil, sync data terbaru dari server di background
-  // (tidak blokir UI, data akan terupdate diam-diam)
-  // Muat foto dari server di background + update nav conditional
+  // Foto sudah ada di D.users dari initLoad — apply ke DOM segera
+  // (tidak perlu tunggu loadPhotosFromServer)
+  applyAllFotoFromD();
+
+  // Update nav conditional untuk guru/siswa
+  if (ME && ME.role === 'guru') updateGuruConditionalNav();
+  if (ME && ME.role === 'siswa') updateSiswaConditionalNav();
+
+  // Muat ulang foto dari server setelah 2 detik untuk pastikan paling update
   setTimeout(function() {
     loadPhotosFromServer();
-    if (ME && ME.role === 'guru') updateGuruConditionalNav();
-    if (ME && ME.role === 'siswa') updateSiswaConditionalNav();
-  }, 1500);
+  }, 2000);
 }
 
 function doLogout() {
@@ -703,19 +730,41 @@ function togglePassEye(btn, inputId) {
 // =====================================================================
 function applyAvatarGuru() {
   var foto = ME && ME.foto;
+
+  // Header avatar
   var icon = document.getElementById('grAvatarIcon');
   var img  = document.getElementById('grAvatarImg');
-  if(!icon||!img) return;
-  if(foto){ icon.style.display='none'; img.src=foto; img.style.display='block'; }
-  else { icon.style.display=''; img.style.display='none'; }
+  if(icon && img) {
+    if(foto){ icon.style.display='none'; img.src=foto; img.style.display='block'; }
+    else { icon.style.display=''; img.style.display='none'; }
+  }
+
+  // Foto besar di halaman Pengaturan Akun guru
+  var settingIcon = document.getElementById('grFotoIcon');
+  var settingImg  = document.getElementById('grFotoImg');
+  if(settingIcon && settingImg) {
+    if(foto){ settingIcon.style.display='none'; settingImg.src=foto; settingImg.style.display='block'; }
+    else { settingIcon.style.display=''; settingImg.style.display='none'; }
+  }
 }
 function applyAvatarStu() {
   var foto = ME && ME.foto;
+
+  // Header avatar (pojok kanan atas dashboard)
   var icon = document.getElementById('stuAvatarIcon');
   var img  = document.getElementById('stuAvatarImg');
-  if(!icon||!img) return;
-  if(foto){ icon.style.display='none'; img.src=foto; img.style.display='block'; }
-  else { icon.style.display=''; img.style.display='none'; }
+  if(icon && img) {
+    if(foto){ icon.style.display='none'; img.src=foto; img.style.display='block'; }
+    else { icon.style.display=''; img.style.display='none'; }
+  }
+
+  // Foto besar di halaman Pengaturan Akun
+  var settingIcon = document.getElementById('stuFotoIcon');
+  var settingImg  = document.getElementById('stuFotoImg');
+  if(settingIcon && settingImg) {
+    if(foto){ settingIcon.style.display='none'; settingImg.src=foto; settingImg.style.display='block'; }
+    else { settingIcon.style.display=''; settingImg.style.display='none'; }
+  }
 }
 
 // =====================================================================
@@ -730,7 +779,7 @@ function _resizeFotoToBase64(file, callback) {
   reader.onload = function(e) {
     var img = new Image();
     img.onload = function() {
-      var MAX = 600;   // HD — tajam bahkan pada layar retina 2x
+        var MAX = 400; // 400px cukup tajam, base64 ~30-40KB = 1 chunk di Photos sheet
       var w = img.width, h = img.height;
       if (w > MAX || h > MAX) {
         if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -739,7 +788,12 @@ function _resizeFotoToBase64(file, callback) {
       var canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      callback(canvas.toDataURL('image/jpeg', 0.88));
+      var b64 = canvas.toDataURL('image/jpeg', 0.80);
+      // Auto-compress jika masih > 40000 chars (mendekati batas 1 chunk)
+      if (b64.length > 40000) {
+        b64 = canvas.toDataURL('image/jpeg', 0.60);
+      }
+      callback(b64);
     };
     img.src = e.target.result;
   };
@@ -772,6 +826,10 @@ function _saveFotoToServer(userId, b64, onDone) {
   _syncFotoNow(function(ok) {
     if(ok) {
       toast('Foto berhasil disimpan ke Google Sheets ✓', 's');
+      // Re-render tabel agar foto langsung tampil
+      try { rSiswa(); } catch(e) {}
+      try { rGuru(); } catch(e) {}
+      try { rGrSiswa(); } catch(e) {}
       if(onDone) onDone(true);
     } else {
       toast('Gagal simpan foto ke server. Coba lagi.', 'e');
@@ -780,7 +838,7 @@ function _saveFotoToServer(userId, b64, onDone) {
   });
 }
 
-/** Kirim foto pending ke server via endpoint syncData yang sudah terbukti bekerja */
+/** Kirim foto pending ke server — hanya foto saja, data lain dikirm via syncServer */
 function _syncFotoNow(onDone) {
   var fotoUpdates = [];
   Object.keys(_pendingFotoSaves).forEach(function(uid) {
@@ -792,35 +850,32 @@ function _syncFotoNow(onDone) {
     return;
   }
 
-  // Strip foto dari data biasa, tapi sertakan fotoUpdates secara eksplisit
-  var safeD = JSON.parse(JSON.stringify(D, function(k, v) {
-    return k === 'foto' ? undefined : v;
-  }));
-
-  // PENTING: payload yang kita kirim ke callGASPost('syncData', payload)
-  // akan dibungkus oleh callGASPost menjadi: { fn: 'syncData', data: payload }
-  // Kemudian doPost membaca body.data → itulah payload kita
-  // Jadi fotoUpdates harus ada di dalam payload (bukan di luar)
+  // Kirim HANYA fotoUpdates + minimal data (tanpa seluruh D)
+  // Ini jauh lebih kecil dari syncData biasa → tidak timeout
   var payload = JSON.stringify({
-    data: safeD,
+    data: { users: [], classes: [], subjects: [], grades: [], tasks: [],
+            submissions: [], teacherSubjects: [], journals: [], absences: [],
+            bankSoal: [], exams: [], examResults: [], ekskuls: [],
+            ekskulMembers: [], ekskulAbsences: [], ekskulGrades: [], tabunganTx: [] },
     cfg: CFG,
     fotoUpdates: fotoUpdates
   });
 
+  console.log('[FOTO] Mengirim', fotoUpdates.length, 'foto, payload:', payload.length, 'bytes');
+
   callGASPost('syncData', payload,
     function(res) {
       if (res && res.success) {
-        // Clear pending queue setelah berhasil
-        _pendingFotoSaves = {};
-        console.log('[FOTO] Tersimpan ke Photos sheet:', res.fotoCount || 0);
+        _pendingFotoSaves = {}; // clear queue
+        console.log('[FOTO] Berhasil tersimpan ke Photos sheet:', res.fotoCount, 'foto');
         if(onDone) onDone(true);
       } else {
-        console.warn('[FOTO] syncData gagal:', res);
+        console.warn('[FOTO] Gagal simpan foto:', res);
         if(onDone) onDone(false);
       }
     },
     function(err) {
-      console.warn('[FOTO] _syncFotoNow error:', err);
+      console.error('[FOTO] _syncFotoNow network error:', err);
       if(onDone) onDone(false);
     }
   );
@@ -857,6 +912,23 @@ function _removeFotoFromServer(userId, onDone) {
 // =====================================================================
 // PENGATURAN GURU
 // =====================================================================
+/** Apply semua foto dari D.users ke elemen DOM (tabel + avatar) */
+function applyAllFotoFromD() {
+  // Apply avatar header untuk user yang sedang login
+  if (ME) {
+    var freshMe = D.users.find(function(u){ return u.id === ME.id; });
+    if (freshMe && freshMe.foto) ME.foto = freshMe.foto;
+    applyAvatarAdmin();
+    applyAvatarGuru();
+    applyAvatarStu();
+  }
+  // Re-render tabel agar foto muncul di baris siswa/guru
+  try { rSiswa(); } catch(e) {}
+  try { rGuru(); } catch(e) {}
+  try { rGrSiswa(); } catch(e) {}
+}
+
+
 function loadGrSet() {
   document.getElementById('grSetNama').textContent     = ME.nama_lengkap || ME.username;
   document.getElementById('grSetUsername').textContent = '@' + ME.username;
@@ -2831,11 +2903,24 @@ function viewFotoUser(id) {
 // PENGATURAN PROFIL ADMIN
 // =====================================================================
 function applyAvatarAdmin() {
-  var foto=ME&&ME.foto;
-  var icon=document.getElementById('admAvatarIcon'), img=document.getElementById('admAvatarImg');
-  if(!icon||!img) return;
-  if(foto){ icon.style.display='none'; img.src=foto; img.style.display='block'; }
-  else { icon.style.display=''; img.style.display='none'; }
+  if (!ME || ME.role !== 'admin') return;
+  var foto = ME.foto;
+
+  // Header avatar (tombol pojok kanan atas)
+  var icon = document.getElementById('admAvatarIcon');
+  var img  = document.getElementById('admAvatarImg');
+  if (icon && img) {
+    if (foto) { icon.style.display='none'; img.src=foto; img.style.display='block'; }
+    else       { icon.style.display=''; img.style.display='none'; }
+  }
+
+  // Foto di modal Pengaturan Profil Admin
+  var icon2 = document.getElementById('admFotoIcon');
+  var img2  = document.getElementById('admFotoImg2');
+  if (icon2 && img2) {
+    if (foto) { icon2.style.display='none'; img2.src=foto; img2.style.display='block'; }
+    else       { icon2.style.display=''; img2.style.display='none'; }
+  }
 }
 function openMAdmSet() {
   var foto=ME&&ME.foto;
