@@ -6432,42 +6432,84 @@ window.debug = window.debugSINMA;
 // =====================================================================
 
 // Cek versi Code.gs yang aktif di server
+// Cek versi Code.gs yang aktif di server
 window.checkVersion = function() {
   callGAS('ping', null, function(r) {
-    console.log('✅ Server version:', r && r.v);
-    alert('Versi Code.gs aktif: ' + (r && r.v) + '\nHarus 2.3.0 — jika berbeda, deploy ulang!');
+    var msg = 'Versi Code.gs aktif: ' + (r && r.v) + '\nHarus 3.0.0';
+    if (r && r.v !== '3.0.0') msg += '\n⚠️ Deploy ulang dengan Code.gs terbaru!';
+    else msg += '\n✅ Versi sudah benar';
+    console.log('Server ping:', r);
+    alert(msg);
   }, function(e) {
-    console.error('❌ Server tidak merespons:', e);
-    alert('Server tidak merespons. Cek GAS_URL.');
+    alert('❌ Server tidak merespons.\nCek: GAS URL sudah benar? Deployment "Anyone"?');
   });
 };
 
+// Cek isi Photos sheet di server
+window.checkPhotosSheet = function() {
+  callGAS('loadPhotos', null, function(r) {
+    if (!r || !r.success) {
+      alert('Gagal load Photos: ' + (r&&r.message||'unknown'));
+      return;
+    }
+    var ids = Object.keys(r.photos || {});
+    var msg = '=== ISI PHOTOS SHEET ===\n';
+    msg += 'Jumlah foto tersimpan: ' + ids.length + '\n\n';
+    ids.forEach(function(uid) {
+      var user = (D.users||[]).find(function(u){ return u.id === uid; });
+      var name = user ? user.nama_lengkap : uid;
+      var size = (r.photos[uid]||'').length;
+      msg += '• ' + name + ' (' + uid + ')\n  Size: ' + size + ' chars\n';
+    });
+    if (ids.length === 0) {
+      msg += 'Photos sheet KOSONG.\nFoto belum pernah tersimpan ke server.';
+    }
+    console.log('Photos sheet:', r.photos);
+    alert(msg);
+  }, function(e) {
+    alert('Error: ' + e);
+  });
+};
+
+// Test upload + simpan foto ke Photos sheet
 window.testFoto = function() {
   console.log('=== TEST FOTO SYNC ===');
   var withFoto = (D.users||[]).filter(function(u){ return u.foto; });
-  var fromLS   = (D.users||[]).filter(function(u){ return !!getFotoLocal(u.id); });
-  console.log('Users dgn foto di D.users:', withFoto.length);
-  // localStorage foto removed - server-only approach
-  withFoto.forEach(function(u){ console.log('  -', u.nama_lengkap, '| foto size:', u.foto.length, 'chars'); });
+  console.log('Users dgn foto di memory (D.users):', withFoto.length);
+  withFoto.forEach(function(u){
+    console.log('  -', u.nama_lengkap, '| foto size:', u.foto ? u.foto.length : 0, 'chars');
+  });
 
-  if(withFoto.length === 0) {
-    console.warn('Tidak ada foto di D.users. Coba upload foto dulu.');
+  if (withFoto.length === 0) {
+    alert('Tidak ada foto di memory.\nCoba upload foto dulu, lalu jalankan testFoto() lagi.');
     return;
   }
 
   var u = withFoto[0];
-  console.log('Test kirim foto user:', u.nama_lengkap, u.id);
-  callGASPost('saveProfilePhoto', [u.id, u.foto], function(r) {
-    console.log('✅ saveProfilePhoto response:', r);
-    if(r && r.success) { alert('BERHASIL! Foto ' + u.nama_lengkap + ' masuk ke Photos sheet.'); }
-    else { alert('GAGAL: ' + (r&&r.message||'unknown')); }
-  }, function(err) {
-    console.error('❌ saveProfilePhoto error:', err);
-    alert('ERROR: ' + (err&&err.message||String(err)));
+  var msg = 'Test kirim foto: ' + u.nama_lengkap + ' (' + u.id + ')\n';
+  msg += 'Ukuran foto: ' + u.foto.length + ' chars\n';
+  msg += 'Mengirim ke Photos sheet...';
+  console.log(msg);
+
+  // Kirim via _syncFotoNow (same path as real upload)
+  _pendingFotoSaves[u.id] = u.foto;
+  _syncFotoNow(function(ok) {
+    if (ok) {
+      alert('✅ BERHASIL!\nFoto ' + u.nama_lengkap + ' tersimpan ke Photos sheet.\n\nBuka tab Photos di Google Sheets untuk verifikasi.');
+    } else {
+      alert('❌ GAGAL kirim foto ke server.\nCek console browser dan Logger GAS untuk detail error.');
+    }
   });
 };
 
-console.log('💡 Ketik checkVersion() untuk cek versi server, testFoto() untuk test simpan foto ke server');
+// Reload foto dari server (tanpa refresh halaman)
+window.reloadFoto = function() {
+  console.log('[FOTO] Manual reload dari server...');
+  loadPhotosFromServer();
+  toast('Memuat ulang foto dari server...', 'i');
+};
+
+console.log('💡 Debug tools: checkVersion() | checkPhotosSheet() | testFoto() | reloadFoto()');
 
 
 // =====================================================================
