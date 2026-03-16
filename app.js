@@ -16,6 +16,7 @@ var _impData = [];
 var _assignGuruId = null; // for assign mapel modal
 var _curAbsenTS = null;   // current absence being edited
 var _pendingFotoSaves = {}; // {userId: b64} — foto yang menunggu disimpan ke server
+var _isSyncing = false;     // Flag: sedang sync ke server → blokir background refresh
 
 // =====================================================================
 // LOADING — PERBAIKAN UTAMA
@@ -227,7 +228,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function _syncGASBackground() {
   if (!GAS_URL) return;
+  // Jangan refresh dari server jika sedang ada sync yang belum selesai
+  // Ini mencegah data baru yang belum tersimpan tertimpa oleh data lama dari server
+  if (_isSyncing) {
+    console.log('[BG SYNC] Skip — sedang sync ke server');
+    return;
+  }
   callGAS('initLoad', null, function(res) {
+    // Double-check: batalkan jika sync dimulai saat request ini sedang berjalan
+    if (_isSyncing) {
+      console.log('[BG SYNC] Dibatalkan — sync sedang berlangsung saat response tiba');
+      return;
+    }
     if (res && res.success && res.data) {
       var fdMap = {};
       if(D && D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id] = s.fileDataUrl; });
@@ -235,7 +247,10 @@ function _syncGASBackground() {
       D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl = fdMap[s.id]; });
       if (ME && ME.id) {
         var fresh = D.users.find(function(u){ return u.id === ME.id; });
-        if (fresh) { ME.foto = fresh.foto || ME.foto; ME.wali_kelas_id = fresh.wali_kelas_id || ME.wali_kelas_id; }
+        if (fresh) {
+          ME.foto = fresh.foto || ME.foto;
+          ME.wali_kelas_id = fresh.wali_kelas_id || ME.wali_kelas_id;
+        }
       }
       console.log('[BG SYNC] Data diperbarui dari server');
     }
@@ -293,6 +308,8 @@ function syncServer(onDone) {
     return;
   }
 
+  _isSyncing = true; // blokir _syncGASBackground selama sync berlangsung
+
   // Strip foto dari payload data biasa (foto dikirim via fotoUpdates jika ada pending)
   var safeD = JSON.parse(JSON.stringify(D, function(k, v) {
     return k === 'foto' ? undefined : v;
@@ -314,12 +331,13 @@ function syncServer(onDone) {
 
   callGASPost('syncData', payload,
     function(res) {
+      _isSyncing = false;
       if (res && res.success) {
         if (fotoUpdates.length > 0) {
-          _pendingFotoSaves = {}; // clear queue setelah berhasil
+          _pendingFotoSaves = {};
           console.log('[SYNC] OK + foto tersimpan:', res.fotoCount || 0);
         } else {
-          console.log('[SYNC] OK');
+          console.log('[SYNC] OK — data tersimpan ke Google Sheets');
         }
       } else {
         console.warn('[SYNC] Respons tidak sukses:', res);
@@ -327,6 +345,7 @@ function syncServer(onDone) {
       if (onDone) onDone(res);
     },
     function(e) {
+      _isSyncing = false;
       console.warn('[SYNC] syncServer error:', e);
       if (onDone) onDone(null);
     }
@@ -529,7 +548,11 @@ function afterLogin() {
 
   // Muat ulang foto dari server setelah 2 detik untuk pastikan paling update
   setTimeout(function() {
-    loadPhotosFromServer();
+    if (!_isSyncing) {
+      loadPhotosFromServer();
+    }
+    if (ME && ME.role === 'guru')  updateGuruConditionalNav();
+    if (ME && ME.role === 'siswa') updateSiswaConditionalNav();
   }, 2000);
 }
 
@@ -1378,14 +1401,11 @@ function saveSiswa(e) {
     D.users.push(Object.assign({id:targetId,created_at:nowTS()},obj));
   }
   closeM('mSiswa');
-  // Simpan foto ke Photos sheet jika ada
+  rSiswa();
   if(fotoVal) {
-    _saveFotoToServer(targetId, fotoVal, function(){
-      syncServer(); rSiswa(); toast('Data siswa disimpan','s');
-    });
+    _saveFotoToServer(targetId, fotoVal, function(ok){ syncServer(function(res){ toast(res&&res.success ? 'Data siswa & foto disimpan ✅' : 'Gagal simpan ke server!', res&&res.success?'s':'e'); }); });
   } else {
-    syncServer(); rSiswa(); toast('Data siswa disimpan','s');
-  }
+    toast('Menyimpan...','i'); syncServer(function(res){ toast(res&&res.success ? 'Data siswa disimpan ✅' : 'Gagal simpan!', res&&res.success?'s':'e'); }); }
 }
 
 // --- Modal ganti foto tersendiri (tombol kamera di tabel) ---
@@ -1868,7 +1888,7 @@ function saveNilai(e) {
   var obj={id_siswa:siswaId,id_mapel:mpId,kd:kds,nilai_ujian:(uj!=='')?Number(uj):null,semester:document.getElementById('nlSem').value,tahun_ajaran:document.getElementById('nlTahun').value};
   if(id){var idx=D.grades.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.grades[idx],obj);}
   else{D.grades.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
-  closeM('mNilai'); syncServer(); rNilai(); toast('Nilai disimpan','s');
+  closeM('mNilai'); rNilai(); toast('Nilai disimpan — mengirim ke server...','i'); syncServer(function(res){ if(res&&res.success) toast('Nilai tersimpan di Google Sheets ✅','s'); else toast('Gagal simpan nilai ke server!','e'); });
 }
 
 // =====================================================================
@@ -1961,7 +1981,7 @@ function saveBulk() {
     if(existing>=0){Object.assign(D.grades[existing],obj);}else{D.grades.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
     saved++;
   });
-  closeM('mBulk'); syncServer(); rNilai(); toast('Nilai '+saved+' siswa disimpan','s');
+  closeM('mBulk'); rNilai(); toast('Nilai '+saved+' siswa disimpan — mengirim ke server...','i'); syncServer(function(res){ if(res&&res.success) toast('Nilai tersimpan di Google Sheets ✅','s'); else toast('Gagal simpan ke server!','e'); });
 }
 
 // =====================================================================
@@ -1997,8 +2017,9 @@ function openMTugas() {
   var myMapel=D.subjects, myKelas=D.classes;
   if(ME&&ME.role==='guru'){
     var mpIds=getGuruMapelIds(); var klIds=getGuruKelasIds();
-    myMapel=D.subjects.filter(function(s){return mpIds.indexOf(s.id)>=0;});
-    myKelas=D.classes.filter(function(c){return klIds.indexOf(c.id)>=0;});
+    // Fallback: tampilkan semua jika guru belum dapat penugasan dari admin
+    if(mpIds.length > 0) myMapel=D.subjects.filter(function(s){return mpIds.indexOf(s.id)>=0;});
+    if(klIds.length > 0) myKelas=D.classes.filter(function(c){return klIds.indexOf(c.id)>=0;});
   }
   document.getElementById('tgMapel').innerHTML=myMapel.map(function(s){return '<option value="'+s.id+'">'+s.nama_mapel+'</option>';}).join('');
   document.getElementById('tgKelas').innerHTML='<option value="all">Semua Kelas</option>'+myKelas.map(function(c){return '<option value="'+c.id+'">'+c.nama_kelas+'</option>';}).join('');
@@ -2025,7 +2046,16 @@ function saveTugas(e) {
   var obj={judul:document.getElementById('tgJudul').value.trim(),deskripsi:document.getElementById('tgDesk').value,id_mapel:document.getElementById('tgMapel').value,id_kelas:document.getElementById('tgKelas').value,deadline:document.getElementById('tgDl').value,created_by:ME.username};
   if(id){var idx=D.tasks.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.tasks[idx],obj);}
   else{D.tasks.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
-  closeM('mTugas'); syncServer(); rTugas(); toast('Tugas disimpan','s');
+  closeM('mTugas');
+  rTugas(); // render segera agar guru melihat tugas baru
+  toast('Tugas disimpan — mengirim ke server...', 'i');
+  syncServer(function(res) {
+    if (res && res.success) {
+      toast('Tugas berhasil disimpan ke Google Sheets ✅', 's');
+    } else {
+      toast('Peringatan: tugas tersimpan lokal tapi gagal ke server. Coba simpan ulang.', 'e');
+    }
+  });
 }
 function delTugas(id) {
   if(!confirm('Hapus tugas ini?')) return;
@@ -3251,7 +3281,7 @@ function saveJurnal(e) {
     waktu:waktuVal};
   if(id){var idx=D.journals.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.journals[idx],obj);}
   else{D.journals.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
-  closeM('mJurnal'); syncServer(); rJurnal(); rGrStats(); toast('Jurnal disimpan','s');
+  closeM('mJurnal'); rJurnal(); rGrStats(); toast('Jurnal disimpan — mengirim ke server...','i'); syncServer(function(res){ if(res&&res.success) toast('Jurnal tersimpan di Google Sheets ✅','s'); else toast('Gagal simpan jurnal ke server!','e'); });
 }
 function delJurnal(id) {
   if(!confirm('Hapus jurnal ini?')) return;
@@ -5031,17 +5061,25 @@ function renderUjianList() {
 
 function openMBuatUjian() {
   _ujianSoalDraft=[];
-  var mpIds=getMyMapelOpts(); var klIds=getMyKelasOpts();
+  var mpIds=getMyMapelOpts();
+  var klIds=getMyKelasOpts();
+
+  // Fallback: jika guru belum dapat penugasan dari admin, tampilkan semua mapel/kelas
+  var allMapels = mpIds.length > 0
+    ? D.subjects.filter(function(s){ return mpIds.indexOf(s.id) >= 0; })
+    : D.subjects;
+  var allKelas = klIds.length > 0
+    ? D.classes.filter(function(c){ return klIds.indexOf(c.id) >= 0; })
+    : D.classes;
+
   document.getElementById('ujId').value='';
   document.getElementById('mBuatUjianT').textContent='Buat Ujian';
   document.getElementById('ujJudulF').value='';
-  document.getElementById('ujMapelF').innerHTML=mpIds.map(function(id){
-    var mp=D.subjects.find(function(s){return s.id===id;});
-    return mp ? '<option value="'+id+'">'+mp.nama_mapel+'</option>' : '';
+  document.getElementById('ujMapelF').innerHTML=allMapels.map(function(mp){
+    return '<option value="'+mp.id+'">'+mp.nama_mapel+'</option>';
   }).join('');
-  document.getElementById('ujKelasF').innerHTML=klIds.map(function(id){
-    var kl=D.classes.find(function(c){return c.id===id;});
-    return kl ? '<option value="'+id+'">'+kl.nama_kelas+'</option>' : '';
+  document.getElementById('ujKelasF').innerHTML=allKelas.map(function(kl){
+    return '<option value="'+kl.id+'">'+kl.nama_kelas+'</option>';
   }).join('');
   document.getElementById('ujDurasiF').value='60';
   document.getElementById('ujDeadlineF').value='';
@@ -5246,7 +5284,17 @@ function saveUjian() {
     obj.id=genID(); obj.token=genToken(); obj.created_at=nowTS();
     D.exams.push(obj);
   }
-  closeM('mBuatUjian'); syncServer(); renderUjianList(); toast('Ujian disimpan. Token: '+(obj.token||D.exams.find(function(e){return e.id===id;}).token),'s');
+  closeM('mBuatUjian');
+  renderUjianList(); // tampilkan segera
+  var tokenStr = obj.token || (D.exams.find(function(e){return e.id===id;}) || {}).token || '';
+  toast('Ujian disimpan! Token: ' + tokenStr, 's');
+  syncServer(function(res) {
+    if (res && res.success) {
+      console.log('[UJIAN] Tersimpan ke server ✅');
+    } else {
+      toast('Peringatan: gagal simpan ujian ke server. Coba refresh.', 'e');
+    }
+  });
 }
 
 function genToken() {
@@ -5256,8 +5304,18 @@ function genToken() {
 }
 
 function toggleAktifUjian(id) {
-  var e=(D.exams||[]).find(function(x){return x.id===id;}); if(!e) return;
-  e.aktif=!e.aktif; syncServer(); renderUjianList(); toast(e.aktif?'Ujian diaktifkan':'Ujian dinonaktifkan','s');
+  var exam=(D.exams||[]).find(function(x){return x.id===id;}); if(!exam) return;
+  exam.aktif = !exam.aktif;
+  var msg = exam.aktif ? 'Ujian diaktifkan ✅' : 'Ujian dinonaktifkan';
+  renderUjianList(); // re-render dulu agar UI langsung update
+  toast(msg, 's');
+  syncServer(function(res) {
+    if (!res || !res.success) {
+      toast('Gagal simpan status ujian ke server', 'e');
+      exam.aktif = !exam.aktif; // rollback
+      renderUjianList();
+    }
+  });
 }
 
 function hapusUjian(id) {
