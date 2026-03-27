@@ -341,7 +341,7 @@ tr:hover td{background:rgba(255,255,255,.025)}
   </div>
 </div>
 <script>
-// Fallback: jika app.js tidak jalan dalam 30 detik, sembunyikan loading paksa
+// Fallback: jika app.js tidak jalan dalam 3 detik, sembunyikan loading paksa
 window._loadFallback = setTimeout(function() {
   var ls = document.getElementById('loadingS');
   var login = document.getElementById('loginS');
@@ -359,7 +359,7 @@ window._loadFallback = setTimeout(function() {
   <div class="glass lcard animate__animated animate__fadeInUp">
     <div id="dLogo" class="alogo"><i class="fa-solid fa-graduation-cap"></i></div>
     <h2 id="dAppName" style="margin-bottom:.25rem">SINMA 2026</h2>
-    <p id="dSchool" style="color:var(--mt);font-size:.85rem;margin-bottom:1.5rem">MAN 3 Hulu Sungai Selatan</p>
+    <p id="dSchool" style="color:var(--mt);font-size:.85rem;margin-bottom:1.5rem">SMA Negeri Unggulan</p>
     <form onsubmit="doLogin(event)">
       <label>Username</label>
       <input type="text" id="lu" class="fc" required autocomplete="username" placeholder="Username">
