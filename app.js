@@ -211,11 +211,9 @@ document.addEventListener('DOMContentLoaded', function() {
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
   // === STRATEGI: Tampilkan loading screen, fetch data GAS, baru tampil login ===
-  // Pastikan loading screen tampil
   var ls = document.getElementById('loadingS');
   if (ls) { ls.style.display = 'flex'; }
 
-  // Step 1: Menghubungi server
   setLoad(15, 'Menghubungi server...');
   setStep(1, 'active');
 
@@ -234,11 +232,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function(res) {
       clearTimeout(_fetchTimeout);
       if (res && res.success && res.data) {
-        // Step 1 selesai
         setStep(1, 'done');
         setLoad(50, 'Data diterima...');
-
-        // Step 2: Proses data
         setStep(2, 'active');
         setTimeout(function() {
           var fdMap = {};
@@ -248,8 +243,6 @@ document.addEventListener('DOMContentLoaded', function() {
           D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl = fdMap[s.id]; });
           setStep(2, 'done');
           setLoad(80, 'Mempersiapkan tampilan...');
-
-          // Step 3: Siapkan UI
           setStep(3, 'active');
           setTimeout(function() {
             applyCFG();
@@ -257,7 +250,7 @@ document.addEventListener('DOMContentLoaded', function() {
             setStep(3, 'done');
             setLoad(100, 'Selesai!');
             console.log('[SINMA] Data berhasil dimuat:', Object.keys(D).length, 'tabel');
-            // Tampilkan login setelah animasi selesai
+            console.log('[SINMA] teacherSubjects:', (D.teacherSubjects||[]).length, 'entri');
             setTimeout(function() {
               if (!_appInit) {
                 _appInit = true;
@@ -601,6 +594,23 @@ function afterLogin() {
     ['grSbApp','grSbAppMob'].forEach(function(id) { var el=document.getElementById(id); if(el) el.textContent=CFG.appName||'SINMA'; });
     document.getElementById('grSchDisp').textContent = CFG.schoolName||'';
     applyAvatarGuru();
+
+    // === PERBAIKAN: Validasi & cocokkan ME.id dengan id_guru di teacherSubjects ===
+    var _myTS = (D.teacherSubjects||[]).filter(function(ts){ return ts.id_guru === ME.id; });
+    console.log('[GURU] ME.id:', ME.id, '| penugasan saya:', _myTS.length, '| total teacherSubjects:', (D.teacherSubjects||[]).length);
+    if (_myTS.length === 0 && (D.teacherSubjects||[]).length > 0) {
+      // Coba fallback: cocokkan dengan trim + case-insensitive
+      var _loose = (D.teacherSubjects||[]).filter(function(ts){
+        return String(ts.id_guru).trim().toLowerCase() === String(ME.id).trim().toLowerCase();
+      });
+      if (_loose.length > 0) {
+        console.warn('[GURU] Format ID berbeda, koreksi: "'+ME.id+'" → "'+_loose[0].id_guru+'"');
+        ME.id = _loose[0].id_guru;
+      } else {
+        console.warn('[GURU] Tidak ada penugasan untuk guru ini. Pastikan admin sudah assign mapel & kelas.');
+      }
+    }
+
     swGTab('gSiswa', document.querySelector('#guruD .nl'));
   } else {
     document.getElementById('stuD').classList.remove('hidden');
@@ -628,7 +638,12 @@ function afterLogin() {
     if (!_isSyncing) {
       loadPhotosFromServer();
     }
-    if (ME && ME.role === 'guru')  updateGuruConditionalNav();
+    // Re-render data guru untuk memastikan siswa tampil setelah semua data siap
+    if (ME && ME.role === 'guru') {
+      updateGuruConditionalNav();
+      try { rGrSiswa(); } catch(e) { console.warn('[GURU] re-render rGrSiswa gagal:', e); }
+      try { rGrStats(); } catch(e) {}
+    }
     if (ME && ME.role === 'siswa') updateSiswaConditionalNav();
   }, 2000);
 }
@@ -3181,6 +3196,10 @@ function rGrSiswa() {
   var myKelasIds=uniqueArr(ts.map(function(t){return t.id_kelas;}));
   var myMapelIds=uniqueArr(ts.map(function(t){return t.id_mapel;}));
 
+  // Debug log untuk diagnosis
+  console.log('[rGrSiswa] ME.id:', ME&&ME.id, '| teacherSubjects total:', (D.teacherSubjects||[]).length, '| milik guru ini:', ts.length);
+  if(ts.length > 0) console.log('[rGrSiswa] Kelas guru:', myKelasIds, '| Mapel:', myMapelIds);
+
   // Populate filter dropdowns
   var kOpt=document.getElementById('fGrKelas');
   var mOpt=document.getElementById('fGrMapel');
@@ -3215,9 +3234,25 @@ function rGrSiswa() {
 
   var tb=document.getElementById('tbGrSiswa');
   if(!rows.length){
-    tb.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:2rem">'+
-      '<i class="fa-solid fa-user-slash" style="display:block;font-size:2rem;margin-bottom:.5rem"></i>'+
-      'Belum ada siswa. Minta admin untuk mengatur penugasan mapel &amp; kelas Anda.</td></tr>';
+    // Beri pesan yang berbeda sesuai kondisi
+    var emptyMsg;
+    if(ts.length===0) {
+      // Guru tidak punya penugasan sama sekali
+      emptyMsg = '<i class="fa-solid fa-triangle-exclamation" style="display:block;font-size:2rem;margin-bottom:.5rem;color:#f59e0b"></i>'+
+        'Belum ada penugasan mapel & kelas untuk akun Anda.<br>'+
+        '<span style="font-size:.78rem;color:#64748b">Minta admin untuk menambahkan penugasan mapel & kelas Anda melalui menu <strong>Data Pengguna → Guru → Tugaskan Mapel</strong>.</span>';
+    } else if(q || fKl || fMp) {
+      // Ada filter aktif yang menyebabkan kosong
+      emptyMsg = '<i class="fa-solid fa-magnifying-glass" style="display:block;font-size:2rem;margin-bottom:.5rem"></i>'+
+        'Tidak ada siswa yang sesuai filter.<br>'+
+        '<span style="font-size:.78rem;color:#64748b">Coba hapus filter atau ubah kriteria pencarian.</span>';
+    } else {
+      // Punya penugasan tapi tidak ada siswa di kelas tersebut
+      emptyMsg = '<i class="fa-solid fa-users-slash" style="display:block;font-size:2rem;margin-bottom:.5rem"></i>'+
+        'Belum ada siswa di kelas yang Anda ampu.<br>'+
+        '<span style="font-size:.78rem;color:#64748b">Kelas yang ditugaskan: '+myKelasIds.length+' kelas, tapi belum ada data siswa. Minta admin untuk mengisi data siswa.</span>';
+    }
+    tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--mt);padding:2rem">'+emptyMsg+'</td></tr>';
     return;
   }
   tb.innerHTML=rows.map(function(r,i){
@@ -4278,6 +4313,8 @@ function verifikasiDataEkskul() {
 var _origSwGTab = swGTab;
 swGTab = function(id, el) {
   _origSwGTab(id, el);
+  // Update conditional nav setiap tab ganti
+  if(ME && ME.role === 'guru') updateGuruConditionalNav();
   var extra = { gUjianMenu:'Ujian & Bank Soal', gUjian:'Ujian', gBankSoal:'Bank Soal', gWaliKelas:'Wali Kelas', gTabungan:'Tabungan Siswa', gEkskul:'Ekstrakulikuler', gCetak:'Cetak Nilai', gCetakJurnal:'Cetak Jurnal', gAbsen:'Absensi Kelas', gCetakAbsen:'Rekap Absensi', gKumpul:'Pengumpulan Tugas' };
   if(extra[id]) document.getElementById('grTabTitle').textContent = extra[id];
   if(id==='gUjianMenu') {
@@ -6513,18 +6550,7 @@ doLogin = function(e) {
   }, 400);
 };
 
-// Patch post-login render
-(function(){
-  var _orig = swGTab;
-  // Also re-check nav whenever guru dashboard opens
-  var origFn = window.swGTab;
-  if(origFn) {
-    window.swGTab = function(id,el){
-      origFn(id,el);
-      updateGuruConditionalNav();
-    };
-  }
-})();
+// (swGTab extension sudah ditangani di atas oleh _origSwGTab/ITEM 4)
 
 // =====================================================================
 // DEBUG & VERIFICATION FUNCTIONS (jalankan dari browser console)
