@@ -54,8 +54,10 @@ function showLoadErr(msg, detail) {
 }
 
 function skipLoading() {
+  if (window._loadFallback) clearTimeout(window._loadFallback);
   if (!_appInit) {
     _appInit = true;
+    _markDataReady();
     toast('Peringatan: Melanjutkan tanpa data server. Beberapa fungsi mungkin tidak bekerja.', 'i');
     initApp();
   }
@@ -208,51 +210,85 @@ document.addEventListener('DOMContentLoaded', function() {
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
-  // === STRATEGI BARU: Langsung tampil login, fetch data di background ===
-  // Sembunyikan loading screen seketika, tampilkan login
+  // === STRATEGI: Tampilkan loading screen, fetch data GAS, baru tampil login ===
+  // Pastikan loading screen tampil
   var ls = document.getElementById('loadingS');
-  if (ls) { ls.style.display = 'none'; }
+  if (ls) { ls.style.display = 'flex'; }
 
-  if (!_appInit) {
-    _appInit = true;
-    initApp();
-  }
+  // Step 1: Menghubungi server
+  setLoad(15, 'Menghubungi server...');
+  setStep(1, 'active');
 
-  // Fetch data dari GAS di background — tidak blokir UI
-  _showBgSpinner('Menghubungi server...');
-
-  var _bgTimeout = setTimeout(function() {
-    // Timeout 15 detik — login tetap bisa jalan, data akan dicoba ulang saat tombol login ditekan
-    _hideBgSpinner(false);
-    _markDataReady(); // izinkan login meski data belum ada (akan di-fetch ulang saat login)
-    console.warn('[SINMA] Background fetch timeout — data akan dimuat saat login');
-  }, 15000);
+  // Timeout 20 detik — jika GAS tidak merespons, tampilkan tombol skip
+  var _fetchTimeout = setTimeout(function() {
+    console.warn('[SINMA] Fetch timeout — tampilkan opsi skip');
+    setStep(1, 'error');
+    setLoad(30, 'Koneksi lambat...');
+    showLoadErr(
+      'Server membutuhkan waktu lebih lama dari biasanya.',
+      'Cek koneksi internet Anda, atau klik "Lanjutkan" untuk masuk tanpa data terbaru.'
+    );
+  }, 20000);
 
   callGAS('initLoad', null,
     function(res) {
-      clearTimeout(_bgTimeout);
+      clearTimeout(_fetchTimeout);
       if (res && res.success && res.data) {
-        var fdMap = {};
-        if(D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id]=s.fileDataUrl; });
-        D = res.data;
-        CFG = res.cfg || CFG;
-        D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl = fdMap[s.id]; });
-        applyCFG(); // update nama app/sekolah jika berbeda dari default
-        _hideBgSpinner(true);
-        _markDataReady();
-        console.log('[SINMA] Data background berhasil dimuat:', Object.keys(D).length, 'tabel');
+        // Step 1 selesai
+        setStep(1, 'done');
+        setLoad(50, 'Data diterima...');
+
+        // Step 2: Proses data
+        setStep(2, 'active');
+        setTimeout(function() {
+          var fdMap = {};
+          if(D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id]=s.fileDataUrl; });
+          D = res.data;
+          CFG = res.cfg || CFG;
+          D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl = fdMap[s.id]; });
+          setStep(2, 'done');
+          setLoad(80, 'Mempersiapkan tampilan...');
+
+          // Step 3: Siapkan UI
+          setStep(3, 'active');
+          setTimeout(function() {
+            applyCFG();
+            _markDataReady();
+            setStep(3, 'done');
+            setLoad(100, 'Selesai!');
+            console.log('[SINMA] Data berhasil dimuat:', Object.keys(D).length, 'tabel');
+            // Tampilkan login setelah animasi selesai
+            setTimeout(function() {
+              if (!_appInit) {
+                _appInit = true;
+                initApp();
+              }
+            }, 500);
+          }, 300);
+        }, 300);
       } else {
-        clearTimeout(_bgTimeout);
-        _hideBgSpinner(false);
+        clearTimeout(_fetchTimeout);
+        setStep(1, 'error');
+        setLoad(30, 'Gagal mengambil data...');
+        setStep(2, 'error');
+        showLoadErr(
+          'Gagal mengambil data dari server.',
+          res ? JSON.stringify(res).substring(0, 80) : 'Tidak ada respons'
+        );
         _markDataReady();
-        console.warn('[SINMA] Background fetch gagal — data akan dicoba saat login');
+        console.warn('[SINMA] Fetch gagal — res:', res);
       }
     },
     function(err) {
-      clearTimeout(_bgTimeout);
-      _hideBgSpinner(false);
+      clearTimeout(_fetchTimeout);
+      setStep(1, 'error');
+      setLoad(20, 'Koneksi gagal...');
+      showLoadErr(
+        'Tidak dapat terhubung ke server.',
+        err && err.message ? err.message : String(err)
+      );
       _markDataReady();
-      console.warn('[SINMA] Background fetch error:', err);
+      console.warn('[SINMA] Fetch error:', err);
     }
   );
 });
