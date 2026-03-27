@@ -152,6 +152,53 @@ function loadXLSX(cb){
 }
 
 // ===== MAIN INIT =====
+// =====================================================================
+// FLAG: apakah data dari server sudah siap (untuk dipakai saat login)
+// =====================================================================
+var _dataReady = false;
+var _dataReadyCallbacks = [];
+
+function onDataReady(fn) {
+  if (_dataReady) { fn(); return; }
+  _dataReadyCallbacks.push(fn);
+}
+
+function _markDataReady() {
+  _dataReady = true;
+  _dataReadyCallbacks.forEach(function(fn){ try{ fn(); }catch(e){} });
+  _dataReadyCallbacks = [];
+}
+
+// Spinner kecil di pojok layar login (indikator background fetch)
+function _showBgSpinner(msg) {
+  var el = document.getElementById('bgSyncSpinner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'bgSyncSpinner';
+    el.style.cssText = 'position:fixed;bottom:80px;right:20px;z-index:9998;background:rgba(15,23,42,.85);' +
+      'color:#93c5fd;font-size:.72rem;padding:.45rem .9rem;border-radius:20px;display:flex;' +
+      'align-items:center;gap:6px;border:1px solid rgba(59,130,246,.3);transition:opacity .4s;';
+    el.innerHTML = '<div style="width:10px;height:10px;border:2px solid rgba(59,130,246,.3);border-top-color:#3b82f6;' +
+      'border-radius:50%;animation:ldsp .75s linear infinite;flex-shrink:0"></div>' +
+      '<span id="bgSyncMsg">Memuat data...</span>';
+    document.body.appendChild(el);
+  }
+  if (msg) { var m = document.getElementById('bgSyncMsg'); if(m) m.textContent = msg; }
+  el.style.opacity = '1';
+  el.style.display = 'flex';
+}
+
+function _hideBgSpinner(ok) {
+  var el = document.getElementById('bgSyncSpinner');
+  if (!el) return;
+  var m = document.getElementById('bgSyncMsg');
+  if (m) m.textContent = ok ? 'Data siap ✓' : 'Data dari cache';
+  setTimeout(function(){
+    el.style.opacity = '0';
+    setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); }, 400);
+  }, 1200);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   // Tema: hanya ini yang boleh dari localStorage (bukan data)
   (function(){
@@ -161,67 +208,51 @@ document.addEventListener('DOMContentLoaded', function() {
   if(window.innerWidth <= 768) requestAnimationFrame(function(){ setTimeout(fixMobileGrids, 150); });
   window.addEventListener('resize', function(){ if(window.innerWidth<=768) fixMobileGrids(); });
 
-  function _showApp() {
-    if (_appInit) return;
+  // === STRATEGI BARU: Langsung tampil login, fetch data di background ===
+  // Sembunyikan loading screen seketika, tampilkan login
+  var ls = document.getElementById('loadingS');
+  if (ls) { ls.style.display = 'none'; }
+
+  if (!_appInit) {
     _appInit = true;
     initApp();
   }
 
-  // SELALU ambil data dari server — tidak gunakan localStorage untuk data
-  setLoad(30, 'Menghubungi server...');
-  setStep(1, 'active');
-  setStep(2, 'active');
+  // Fetch data dari GAS di background — tidak blokir UI
+  _showBgSpinner('Menghubungi server...');
 
-  var _t = setTimeout(function() {
-    setStep(1, 'error');
-    setLoad(100, 'Timeout — server tidak merespons');
-    document.getElementById('loadSkip').style.display = 'block';
-    var box = document.getElementById('loadErrBox');
-    if(box) box.style.display = 'block';
-    var msg = document.getElementById('loadErrMsg');
-    if(msg) msg.textContent = 'Server tidak merespons. Cek koneksi internet atau status GAS.';
-    _showApp();
-  }, 20000);
+  var _bgTimeout = setTimeout(function() {
+    // Timeout 15 detik — login tetap bisa jalan, data akan dicoba ulang saat tombol login ditekan
+    _hideBgSpinner(false);
+    _markDataReady(); // izinkan login meski data belum ada (akan di-fetch ulang saat login)
+    console.warn('[SINMA] Background fetch timeout — data akan dimuat saat login');
+  }, 15000);
 
   callGAS('initLoad', null,
     function(res) {
-      clearTimeout(_t);
+      clearTimeout(_bgTimeout);
       if (res && res.success && res.data) {
         var fdMap = {};
         if(D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id]=s.fileDataUrl; });
         D = res.data;
         CFG = res.cfg || CFG;
         D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl = fdMap[s.id]; });
-        setStep(1, 'done');
-        setStep(2, 'done');
-        setStep(3, 'active');
-        setLoad(100, 'Data berhasil dimuat!');
-        setTimeout(function(){ setStep(3, 'done'); _showApp(); }, 200);
+        applyCFG(); // update nama app/sekolah jika berbeda dari default
+        _hideBgSpinner(true);
+        _markDataReady();
+        console.log('[SINMA] Data background berhasil dimuat:', Object.keys(D).length, 'tabel');
       } else {
-        clearTimeout(_t);
-        setStep(1, 'error');
-        setStep(2, 'error');
-        var errMsg = (res && res.message) ? res.message : 'Respons server tidak valid.';
-        setLoad(100, 'Gagal');
-        var box = document.getElementById('loadErrBox');
-        if(box) box.style.display = 'block';
-        var msg = document.getElementById('loadErrMsg');
-        if(msg) msg.textContent = 'Gagal memuat data: ' + errMsg;
-        document.getElementById('loadSkip').style.display = 'block';
-        _showApp();
+        clearTimeout(_bgTimeout);
+        _hideBgSpinner(false);
+        _markDataReady();
+        console.warn('[SINMA] Background fetch gagal — data akan dicoba saat login');
       }
     },
     function(err) {
-      clearTimeout(_t);
-      setStep(1, 'error');
-      setStep(2, 'error');
-      setLoad(100, 'Gagal koneksi');
-      var box = document.getElementById('loadErrBox');
-      if(box) box.style.display = 'block';
-      var msgEl = document.getElementById('loadErrMsg');
-      if(msgEl) msgEl.textContent = 'Gagal terhubung ke server GAS. Pastikan URL GAS benar dan sudah di-deploy sebagai Anyone.';
-      document.getElementById('loadSkip').style.display = 'block';
-      _showApp();
+      clearTimeout(_bgTimeout);
+      _hideBgSpinner(false);
+      _markDataReady();
+      console.warn('[SINMA] Background fetch error:', err);
     }
   );
 });
@@ -259,10 +290,7 @@ function _syncGASBackground() {
 function initApp() {
   if (window._loadFallback) clearTimeout(window._loadFallback);
   var ls = document.getElementById('loadingS');
-  if (ls) {
-    ls.style.opacity = '0';
-    setTimeout(function() { ls.style.display = 'none'; }, 420);
-  }
+  if (ls) { ls.style.display = 'none'; }
   applyCFG();
   document.getElementById('loginS').classList.remove('hidden');
 }
@@ -466,29 +494,42 @@ function doLogin(e) {
 
   // Verifikasi langsung ke server
   callGAS('login', [u, p], function(r) {
-    setLoginLoading(false);
     if (r && r.success) {
       ME = r.user;
-      // Pastikan data sudah ada di D (dari initLoad saat startup)
+      // Jika background fetch belum selesai, tunggu sebentar lalu lanjut
       if (!D.users || D.users.length === 0) {
-        // Jika data belum ada (misal skip loading), ambil dari server
-        toast('Mengambil data dari server...', 'i');
-        callGAS('initLoad', null, function(res) {
-          if (res && res.success && res.data) {
-            var fdMap = {};
-            if(D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id]=s.fileDataUrl; });
-            D = res.data; CFG = res.cfg || CFG;
-            D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl=fdMap[s.id]; });
+        setLoginLoading(true);
+        var _loginWait = 0;
+        var _loginPoll = setInterval(function() {
+          _loginWait += 300;
+          if ((D.users && D.users.length > 0) || _loginWait >= 8000) {
+            clearInterval(_loginPoll);
+            setLoginLoading(false);
+            if (!D.users || D.users.length === 0) {
+              // Fallback: fetch sekali lagi
+              callGAS('initLoad', null, function(res) {
+                if (res && res.success && res.data) {
+                  var fdMap = {};
+                  if(D.submissions) D.submissions.forEach(function(s){ if(s.fileDataUrl) fdMap[s.id]=s.fileDataUrl; });
+                  D = res.data; CFG = res.cfg || CFG;
+                  D.submissions.forEach(function(s){ if(!s.fileDataUrl && fdMap[s.id]) s.fileDataUrl=fdMap[s.id]; });
+                }
+                afterLogin();
+              }, function() {
+                toast('Peringatan: data server belum termuat penuh', 'i');
+                afterLogin();
+              });
+            } else {
+              afterLogin();
+            }
           }
-          afterLogin();
-        }, function() {
-          toast('Peringatan: data server belum termuat penuh', 'i');
-          afterLogin();
-        });
+        }, 300);
       } else {
+        setLoginLoading(false);
         afterLogin();
       }
     } else {
+      setLoginLoading(false);
       err.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> ' + ((r && r.message) || 'Username atau password salah!');
       err.style.display = 'block';
     }
