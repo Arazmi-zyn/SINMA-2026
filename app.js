@@ -468,6 +468,27 @@ function uniqueArr(arr) {
 function genID() { return 'ID-' + Math.random().toString(36).substr(2,6).toUpperCase(); }
 function nowTS() { return new Date().toLocaleString('id-ID'); }
 
+/** findKelas: cari objek kelas dengan loose matching (antisipasi whitespace/tipe berbeda) */
+function findKelas(kelasId) {
+  if(!kelasId) return null;
+  var cl = D.classes || [];
+  // 1. Strict match
+  var found = cl.find(function(c){ return c.id === kelasId; });
+  if(found) return found;
+  // 2. String trim match
+  var kid = String(kelasId).trim();
+  found = cl.find(function(c){ return String(c.id).trim() === kid; });
+  if(found) return found;
+  // 3. Case-insensitive match
+  found = cl.find(function(c){ return String(c.id).trim().toLowerCase() === kid.toLowerCase(); });
+  return found || null;
+}
+function getKelasNama(kelasId) {
+  var kl = findKelas(kelasId);
+  return kl ? kl.nama_kelas : '–';
+}
+
+
 function toast(msg, type) {
   var t = document.createElement('div');
   t.className = 'toast ' + (type==='s'?'ts':type==='e'?'te':'ti');
@@ -614,7 +635,7 @@ function afterLogin() {
     swGTab('gSiswa', document.querySelector('#guruD .nl'));
   } else {
     document.getElementById('stuD').classList.remove('hidden');
-    var kl = D.classes.find(function(c) { return c.id === ME.kelas_id; }) || { nama_kelas:'–' };
+    var kl = (findKelas(ME.kelas_id)||{nama_kelas:'–'});
     document.getElementById('stuNm').textContent = ME.nama_lengkap;
     document.getElementById('stuKl').textContent = kl.nama_kelas;
     document.getElementById('stuWel').textContent = 'Halo, ' + (ME.nama_lengkap || ME.username) + '!';
@@ -1113,7 +1134,7 @@ function saveGrPassword() {
 // PENGATURAN SISWA
 // =====================================================================
 function loadStuSet() {
-  var kl = D.classes.find(function(c){return c.id===ME.kelas_id;})||{nama_kelas:'–'};
+  var kl = (findKelas(ME.kelas_id)||{nama_kelas:'–'});
   document.getElementById('stuSetNama').textContent  = ME.nama_lengkap || ME.username;
   document.getElementById('stuSetKelas').textContent = 'Kelas ' + kl.nama_kelas;
   document.getElementById('stuNewUser').value  = ME.username || '';
@@ -1414,7 +1435,7 @@ function rSiswa() {
   var kOpts = D.classes.map(function(c) { return '<option value="'+c.id+'">'+c.nama_kelas+'</option>'; }).join('');
   document.getElementById('siKelas').innerHTML = '<option value="">-- Tanpa Kelas --</option>'+kOpts;
   document.getElementById('tbSiswa').innerHTML = siswa.map(function(u,i) {
-    var kl = D.classes.find(function(c) { return c.id===u.kelas_id; })||{nama_kelas:'–'};
+    var kl = (findKelas(u.kelas_id)||{nama_kelas:'–'});
     var kdCnt = D.grades.filter(function(g) { return g.id_siswa===u.id; }).reduce(function(a,g) { return a+(g.kd||[]).length; },0);
     var passSpan = _showPass ? ('<span class="ptxt">'+u.password+'</span>') : ('<span style="color:var(--mt)">••••••</span>');
     var avatarHtml = u.foto
@@ -1503,7 +1524,7 @@ function saveSiswa(e) {
 // --- Modal ganti foto tersendiri (tombol kamera di tabel) ---
 function editFotoSiswa(id) {
   var u=D.users.find(function(x){return x.id===id;}); if(!u) return;
-  var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+  var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
   document.getElementById('mfsSiswaId').value = id;
   document.getElementById('mfsSiswaName').textContent = u.nama_lengkap;
   document.getElementById('mfsSiswaKelas').textContent = 'Kelas '+kl.nama_kelas;
@@ -1551,7 +1572,7 @@ function hapusMfsFoto() {
 // --- Lightbox lihat foto (admin & guru) ---
 function viewFotoSiswa(id) {
   var u=D.users.find(function(x){return x.id===id;}); if(!u||!u.foto) return;
-  var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+  var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
   document.getElementById('vfNama').textContent=u.nama_lengkap;
   document.getElementById('vfKelas').textContent='Kelas '+kl.nama_kelas+' · @'+u.username;
   document.getElementById('vfImg').src=u.foto;
@@ -1596,7 +1617,7 @@ function openMKelas() {
 }
 
 function editKelas(id) {
-  var c = D.classes.find(function(x) { return x.id===id; }); if(!c) return;
+  var c = findKelas(id); if(!c) return;
   document.getElementById('mKelasT').textContent='Edit Kelas';
   document.getElementById('klId').value=c.id; 
   document.getElementById('klNama').value=c.nama_kelas;
@@ -1646,12 +1667,12 @@ function saveKelas(e) {
     if(guru) {
       guru.wali_kelas_id = kelasId;
       // Update juga field lama untuk display
-      var kelas = D.classes.find(function(c){return c.id===kelasId;});
+      var kelas = findKelas(kelasId);
       if(kelas) kelas.wali_kelas = guru.nama_lengkap;
     }
   } else {
     // Tidak ada wali kelas
-    var kelas = D.classes.find(function(c){return c.id===kelasId;});
+    var kelas = findKelas(kelasId);
     if(kelas) kelas.wali_kelas = '—';
   }
   
@@ -1803,7 +1824,7 @@ function rNilai() {
     kdsAll.forEach(function(k){html+='<th>'+k+'</th>';});
     html+='<th>Ujian Sem.</th><th>Nilai Akhir</th><th>Predikat</th><th>Aksi</th></tr></thead><tbody>';
     siswaTampil.forEach(function(u,i){
-      var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+      var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
       var g=D.grades.find(function(gg){return gg.id_siswa===u.id&&gg.id_mapel===mp.id&&(!fSm||gg.semester==fSm)&&(!fTh||gg.tahun_ajaran===fTh);});
       var na=g?calcNA(g,mp.id):null;
       var predikat=na===null?'–':(na>=90?'A':na>=80?'B':na>=70?'C':na>=60?'D':'E');
@@ -2086,7 +2107,7 @@ function rTugas() {
     tasks=D.tasks.filter(function(t){return mpIds.indexOf(t.id_mapel)>=0||t.created_by===ME.username;});
   }
   document.getElementById('tbTugas').innerHTML=tasks.map(function(t,i){
-    var kl=t.id_kelas==='all'?{nama_kelas:'Semua Kelas'}:(D.classes.find(function(c){return c.id===t.id_kelas;})||{nama_kelas:'–'});
+    var kl=t.id_kelas==='all'?{nama_kelas:'Semua Kelas'}:((findKelas(t.id_kelas)||{nama_kelas:'–'}));
     var mp=D.subjects.find(function(s){return s.id===t.id_mapel;})||{nama_mapel:'–',kode_mapel:'–'};
     var expired=new Date(t.deadline)<new Date();
     var cntSub=D.submissions.filter(function(s){return s.id_tugas===t.id;}).length;
@@ -2187,7 +2208,7 @@ function rKumpul() {
   document.getElementById('tbKumpul').innerHTML=subs.map(function(s,i){
     var t=D.tasks.find(function(tt){return tt.id===s.id_tugas;})||{judul:'Tugas Dihapus'};
     var u=D.users.find(function(uu){return uu.id===s.id_siswa;})||{nama_lengkap:'–'};
-    var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+    var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
     var fileBtns='<span style="color:var(--mt);font-size:.74rem">Tanpa file</span>';
     if(s.linkUrl){
       fileBtns='<button class="btn bi bsm" onclick="prevFile(\''+i+'\')" title="'+s.linkUrl+'"><i class="fa-solid fa-link"></i> Link</button>'+
@@ -2379,7 +2400,7 @@ function genPrint() {
     kdsAll.forEach(function(k){html+='<th style="border:1px solid #333;padding:5px">'+k+'</th>';});
     html+='<th style="border:1px solid #333;padding:5px">Ujian</th><th style="border:1px solid #333;padding:5px">Nilai Akhir</th><th style="border:1px solid #333;padding:5px">Predikat</th></tr>';
     siswa.forEach(function(u,i){
-      var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+      var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
       var g=D.grades.find(function(gg){return gg.id_siswa===u.id&&gg.id_mapel===mp.id&&(!sem||gg.semester==sem)&&(!tahun||gg.tahun_ajaran===tahun);});
       var na=g?calcNA(g,mp.id):null; var p=na===null?'–':(na>=90?'A':na>=80?'B':na>=70?'C':na>=60?'D':'E');
       var bg=na===null?'#fff':na>=90?'#d1fae5':na>=80?'#dbeafe':na>=70?'#fef3c7':'#fee2e2';
@@ -2428,7 +2449,7 @@ function _doExportExcel() {
     var headers=['No','Nama Siswa','Kelas'].concat(kdsAll).concat(['Ujian Sem.','Nilai Akhir','Predikat']);
     var rows=[headers];
     siswa.forEach(function(u,i){
-      var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+      var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
       var g=D.grades.find(function(gg){return gg.id_siswa===u.id&&gg.id_mapel===mp.id&&(!sem||gg.semester==sem)&&(!tahun||gg.tahun_ajaran===tahun);});
       var na=g?calcNA(g,mp.id):null; var p=na===null?'–':(na>=90?'A':na>=80?'B':na>=70?'C':na>=60?'D':'E');
       var row=[(i+1),u.nama_lengkap,kl.nama_kelas];
@@ -2816,7 +2837,7 @@ function dlTemplate(type) {
     var data3=[['username','kode_mapel','kd_label','nilai','nilai_ujian','semester','tahun_ajaran']].concat(exRows);
     var ws3=XLSX.utils.aoa_to_sheet(data3); ws3['!cols']=[{wch:16},{wch:12},{wch:12},{wch:8},{wch:13},{wch:10},{wch:14}];
     XLSX.utils.book_append_sheet(wb,ws3,'Template Nilai KD');
-    var siswaDft=[['username','nama_lengkap','kelas']].concat(D.users.filter(function(u){return u.role==='siswa';}).map(function(u){var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};return[u.username,u.nama_lengkap,kl.nama_kelas];}));
+    var siswaDft=[['username','nama_lengkap','kelas']].concat(D.users.filter(function(u){return u.role==='siswa';}).map(function(u){var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});return[u.username,u.nama_lengkap,kl.nama_kelas];}));
     if(siswaDft.length===1)siswaDft.push(['(belum ada siswa)','','']);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(siswaDft),'Daftar Siswa');
     var mapelDft=[['kode_mapel','nama_mapel']].concat(D.subjects.map(function(s){return[s.kode_mapel,s.nama_mapel];}));
@@ -2894,7 +2915,7 @@ function rGuru() {
     var myTS=D.teacherSubjects.filter(function(ts){return ts.id_guru===u.id;});
     var mapelBadges=myTS.map(function(ts){
       var mp=D.subjects.find(function(s){return s.id===ts.id_mapel;})||{kode_mapel:'?'};
-      var kl=D.classes.find(function(c){return c.id===ts.id_kelas;})||{nama_kelas:'?'};
+      var kl=(findKelas(ts.id_kelas)||{nama_kelas:'–'});
       return '<span class="badge bBl" style="margin:2px;font-size:.65rem">'+mp.kode_mapel+' / '+kl.nama_kelas+'</span>';
     }).join('');
     var avatarHtml = u.foto
@@ -3110,7 +3131,7 @@ function renderAssignList() {
   if(!list.length){el.innerHTML='<p style="color:var(--mt);font-size:.8rem">Belum ada penugasan</p>';return;}
   el.innerHTML=list.map(function(ts){
     var mp=D.subjects.find(function(s){return s.id===ts.id_mapel;})||{nama_mapel:'?',kode_mapel:'?'};
-    var kl=D.classes.find(function(c){return c.id===ts.id_kelas;})||{nama_kelas:'?'};
+    var kl=(findKelas(ts.id_kelas)||{nama_kelas:'–'});
     return '<div class="flex aic jb" style="background:rgba(255,255,255,.04);border:1px solid var(--gbr);border-radius:8px;padding:.45rem .8rem;margin-bottom:.4rem">'+
       '<span><span class="badge bBl" style="margin-right:.4rem">'+mp.kode_mapel+'</span>'+mp.nama_mapel+' — <span class="badge" style="background:rgba(16,185,129,.12);color:#34d399">'+kl.nama_kelas+'</span></span>'+
       '<button class="btn bd bsm" onclick="removeAssignment(\''+ts.id+'\')"><i class="fa-solid fa-xmark"></i></button>'+
@@ -3204,7 +3225,7 @@ function rGrSiswa() {
   var kOpt=document.getElementById('fGrKelas');
   var mOpt=document.getElementById('fGrMapel');
   var curKl=kOpt.value, curMp=mOpt.value;
-  kOpt.innerHTML='<option value="">Semua Kelas</option>'+myKelasIds.map(function(kid){var kl=D.classes.find(function(c){return c.id===kid;})||{nama_kelas:'?'};return '<option value="'+kid+'">'+kl.nama_kelas+'</option>';}).join('');
+  kOpt.innerHTML='<option value="">Semua Kelas</option>'+myKelasIds.map(function(kid){var kl=(findKelas(kid)||{nama_kelas:'–'});return '<option value="'+kid+'">'+kl.nama_kelas+'</option>';}).join('');
   mOpt.innerHTML='<option value="">Semua Mapel</option>'+myMapelIds.map(function(mid){var mp=D.subjects.find(function(s){return s.id===mid;})||{nama_mapel:'?'};return '<option value="'+mid+'">'+mp.nama_mapel+'</option>';}).join('');
   kOpt.value=curKl; mOpt.value=curMp;
 
@@ -3297,7 +3318,7 @@ function openMAddSiswaGuru() {
   var mpOpt=document.getElementById('addSgMapel');
   var klOpt=document.getElementById('addSgKelas');
   mpOpt.innerHTML=ts.map(function(t){var mp=D.subjects.find(function(s){return s.id===t.id_mapel;})||{nama_mapel:'?',id:t.id_mapel};return '<option value="'+t.id+'">'+mp.nama_mapel+'</option>';}).join('');
-  klOpt.innerHTML=ts.map(function(t){var kl=D.classes.find(function(c){return c.id===t.id_kelas;})||{nama_kelas:'?',id:t.id_kelas};return '<option value="'+kl.id+'">'+kl.nama_kelas+'</option>';}).join('');
+  klOpt.innerHTML=ts.map(function(t){var kl=(findKelas(t.id_kelas)||{nama_kelas:'–',id:t.id_kelas});return '<option value="'+kl.id+'">'+kl.nama_kelas+'</option>';}).join('');
   filterAddSiswaList();
   openM('mAddSiswaGuru');
 }
@@ -3307,7 +3328,7 @@ function filterAddSiswaList() {
   if(q) allSiswa=allSiswa.filter(function(u){return (u.nama_lengkap||'').toLowerCase().indexOf(q)>=0||(u.username||'').toLowerCase().indexOf(q)>=0;});
   var tsId=document.getElementById('addSgMapel').value;
   document.getElementById('addSiswaList').innerHTML=allSiswa.map(function(u){
-    var kl=D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'–'};
+    var kl=(findKelas(u.kelas_id)||{nama_kelas:'–'});
     return '<div class="flex aic jb" style="background:rgba(255,255,255,.04);border:1px solid var(--gbr);border-radius:8px;padding:.5rem .9rem;margin-bottom:.35rem">'+
       '<div><strong>'+u.nama_lengkap+'</strong> <span style="color:var(--mt);font-size:.78rem">('+u.username+')</span><br><span class="badge bBl" style="font-size:.65rem">'+kl.nama_kelas+'</span></div>'+
       '<button class="btn bp bsm" onclick="addSiswaToGuru(\''+u.id+'\',\''+tsId+'\')"><i class="fa-solid fa-plus"></i></button>'+
@@ -3333,7 +3354,7 @@ function getMyKelasOpts() { return getGuruKelasIds(); }
 function popJurnalFilters() {
   var mpIds=getGuruMapelIds(); var klIds=getGuruKelasIds();
   document.getElementById('fJrMapel').innerHTML='<option value="">Semua Mapel</option>'+mpIds.map(function(id){var mp=D.subjects.find(function(s){return s.id===id;})||{nama_mapel:id};return '<option value="'+id+'">'+mp.nama_mapel+'</option>';}).join('');
-  document.getElementById('fJrKelas').innerHTML='<option value="">Semua Kelas</option>'+klIds.map(function(id){var kl=D.classes.find(function(c){return c.id===id;})||{nama_kelas:id};return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
+  document.getElementById('fJrKelas').innerHTML='<option value="">Semua Kelas</option>'+klIds.map(function(id){var kl=(findKelas(id)||{nama_kelas:id});return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
 }
 function rJurnal() {
   var fMp=document.getElementById('fJrMapel').value;
@@ -3346,7 +3367,7 @@ function rJurnal() {
   }).sort(function(a,b){return b.tanggal.localeCompare(a.tanggal);});
   document.getElementById('tbJurnal').innerHTML=list.map(function(j,i){
     var mp=D.subjects.find(function(s){return s.id===j.id_mapel;})||{nama_mapel:'?',kode_mapel:'?'};
-    var kl=D.classes.find(function(c){return c.id===j.id_kelas;})||{nama_kelas:'?'};
+    var kl=(findKelas(j.id_kelas)||{nama_kelas:'–'});
     var wk=j.waktu||'Terlampir';
     return '<tr><td>'+(i+1)+'</td><td>'+j.tanggal+'</td>'+
       '<td><span class="badge bBl">'+kl.nama_kelas+'</span></td>'+
@@ -3372,7 +3393,7 @@ function openMJurnal() {
   document.getElementById('mJurnalT').textContent='Tambah Jurnal Mengajar';
   document.getElementById('jrId').value='';
   document.getElementById('jrMapel').innerHTML=mpIds.map(function(id){var mp=D.subjects.find(function(s){return s.id===id;})||{nama_mapel:id};return '<option value="'+id+'">'+mp.nama_mapel+'</option>';}).join('');
-  document.getElementById('jrKelas').innerHTML=klIds.map(function(id){var kl=D.classes.find(function(c){return c.id===id;})||{nama_kelas:id};return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
+  document.getElementById('jrKelas').innerHTML=klIds.map(function(id){var kl=(findKelas(id)||{nama_kelas:id});return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
   document.getElementById('jrTgl').value=new Date().toISOString().slice(0,10);
   document.getElementById('jrMateri').value=''; document.getElementById('jrKegiatan').value=''; document.getElementById('jrCatatan').value='';
   document.getElementById('jrWaktuMode').value='terlampir'; document.getElementById('jrWaktuJam').value=''; document.getElementById('jrWaktuJam').classList.add('hidden');
@@ -3384,7 +3405,7 @@ function editJurnal(id) {
   document.getElementById('mJurnalT').textContent='Edit Jurnal';
   document.getElementById('jrId').value=j.id;
   document.getElementById('jrMapel').innerHTML=mpIds.map(function(id){var mp=D.subjects.find(function(s){return s.id===id;})||{nama_mapel:id};return '<option value="'+id+'">'+mp.nama_mapel+'</option>';}).join('');
-  document.getElementById('jrKelas').innerHTML=klIds.map(function(id){var kl=D.classes.find(function(c){return c.id===id;})||{nama_kelas:id};return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
+  document.getElementById('jrKelas').innerHTML=klIds.map(function(id){var kl=(findKelas(id)||{nama_kelas:id});return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
   document.getElementById('jrMapel').value=j.id_mapel; document.getElementById('jrKelas').value=j.id_kelas;
   document.getElementById('jrTgl').value=j.tanggal; document.getElementById('jrMateri').value=j.materi;
   document.getElementById('jrKegiatan').value=j.kegiatan; document.getElementById('jrCatatan').value=j.catatan||'';
@@ -3428,7 +3449,7 @@ function initCetakJurnal() {
   var klIds = getGuruKelasIds();
   var mpIds = getGuruMapelIds();
   document.getElementById('cjKelas').innerHTML = '<option value="">Semua Kelas</option>' +
-    klIds.map(function(id){ var kl=D.classes.find(function(c){return c.id===id;})||{nama_kelas:id}; return '<option value="'+id+'">'+kl.nama_kelas+'</option>'; }).join('');
+    klIds.map(function(id){ var kl=(findKelas(id)||{nama_kelas:id}); return '<option value="'+id+'">'+kl.nama_kelas+'</option>'; }).join('');
   document.getElementById('cjMapel').innerHTML = '<option value="">Semua Mapel</option>' +
     mpIds.map(function(id){ var mp=D.subjects.find(function(s){return s.id===id;})||{nama_mapel:id}; return '<option value="'+id+'">'+mp.nama_mapel+'</option>'; }).join('');
   // Set default bulan & tahun ke bulan saat ini
@@ -3527,7 +3548,7 @@ function _buildJurnalData() {
   } else {
     list.forEach(function(j) {
       var mp  = D.subjects.find(function(s){return s.id===j.id_mapel;})||{nama_mapel:'',kode_mapel:''};
-      var kl  = D.classes.find(function(c){return c.id===j.id_kelas;})||{nama_kelas:''};
+      var kl  = (findKelas(j.id_kelas)||{nama_kelas:''});
       var uraian = j.kegiatan || j.materi || '–';
       var kelasInfo = kl.nama_kelas ? (mp.kode_mapel ? kl.nama_kelas+'/'+mp.kode_mapel : kl.nama_kelas) : (mp.kode_mapel||'');
       var waktu = j.waktu || 'Terlampir';
@@ -3640,7 +3661,7 @@ function loadAbRbPref() {
 function initAbsen() {
   var klIds=getGuruKelasIds();
   var mpIds=getGuruMapelIds();
-  document.getElementById('abKelas').innerHTML=klIds.map(function(id){var kl=D.classes.find(function(c){return c.id===id;})||{nama_kelas:id};return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
+  document.getElementById('abKelas').innerHTML=klIds.map(function(id){var kl=(findKelas(id)||{nama_kelas:id});return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
   document.getElementById('abMapel').innerHTML=mpIds.map(function(id){var mp=D.subjects.find(function(s){return s.id===id;})||{nama_mapel:id};return '<option value="'+id+'">'+mp.nama_mapel+'</option>';}).join('');
   var now=new Date();
   document.getElementById('abTgl').value=now.toISOString().slice(0,10);
@@ -3655,7 +3676,7 @@ function loadAbsenSiswa() {
   var mpId=document.getElementById('abMapel').value;
   var tgl=document.getElementById('abTgl').value;
   if(!klId||!mpId||!tgl){document.getElementById('absenForm').classList.add('hidden');return;}
-  var kl=D.classes.find(function(c){return c.id===klId;})||{nama_kelas:'?'};
+  var kl=(findKelas(klId)||{nama_kelas:'–'});
   var mp=D.subjects.find(function(s){return s.id===mpId;})||{nama_mapel:'?'};
   document.getElementById('absenTitle').textContent='Absensi '+kl.nama_kelas+' — '+mp.nama_mapel+' — '+tgl;
   // Get students in this class (from teacherSubjects)
@@ -3734,7 +3755,7 @@ function loadRekapBulanan() {
 
   if(!klId || !mpId) { wrap.classList.add('hidden'); return; }
 
-  var kl = D.classes.find(function(c){return c.id===klId;})||{nama_kelas:'?'};
+  var kl = (findKelas(klId)||{nama_kelas:'–'});
   var mp = D.subjects.find(function(s){return s.id===mpId;})||{nama_mapel:'?'};
   var bulanNames=['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
@@ -3828,7 +3849,7 @@ function buildRekapBulananHtml() {
   var tahun = parseInt(document.getElementById('abRbTahun').value);
   if(!klId||!mpId) return null;
 
-  var kl = D.classes.find(function(c){return c.id===klId;})||{nama_kelas:'?'};
+  var kl = (findKelas(klId)||{nama_kelas:'–'});
   var mp = D.subjects.find(function(s){return s.id===mpId;})||{nama_mapel:'?'};
   var bulanNames=['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
@@ -3997,7 +4018,7 @@ function printRekapBulanan() {
 // =====================================================================
 function initRekapAbsen() {
   var klIds=getGuruKelasIds(); var mpIds=getGuruMapelIds();
-  document.getElementById('rAbKelas').innerHTML='<option value="">Semua Kelas</option>'+klIds.map(function(id){var kl=D.classes.find(function(c){return c.id===id;})||{nama_kelas:id};return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
+  document.getElementById('rAbKelas').innerHTML='<option value="">Semua Kelas</option>'+klIds.map(function(id){var kl=(findKelas(id)||{nama_kelas:id});return '<option value="'+id+'">'+kl.nama_kelas+'</option>';}).join('');
   document.getElementById('rAbMapel').innerHTML='<option value="">Semua Mapel</option>'+mpIds.map(function(id){var mp=D.subjects.find(function(s){return s.id===id;})||{nama_mapel:id};return '<option value="'+id+'">'+mp.nama_mapel+'</option>';}).join('');
 }
 function _buildRekapAbsenData() {
@@ -4019,7 +4040,7 @@ function _buildRekapAbsenData() {
   // Aggregate per siswa saja (tidak dobel)
   var siswaMap={};
   list.forEach(function(ab){
-    var kl=D.classes.find(function(c){return c.id===ab.id_kelas;})||{nama_kelas:'?'};
+    var kl=(findKelas(ab.id_kelas)||{nama_kelas:'–'});
     (ab.records||[]).forEach(function(r){
       if(!r.id_siswa) return;
       if(!siswaMap[r.id_siswa]) {
@@ -4033,7 +4054,7 @@ function _buildRekapAbsenData() {
 
   var rows=Object.values(siswaMap).sort(function(a,b){return a.nama.localeCompare(b.nama,'id');});
   var guruName=ME.nama_lengkap||ME.username;
-  var filterDesc=(klId?(D.classes.find(function(c){return c.id===klId;})||{nama_kelas:klId}).nama_kelas:'Semua Kelas')+
+  var filterDesc=(klId?((findKelas(klId)||{nama_kelas:klId})).nama_kelas:'Semua Kelas')+
     ' | '+(mpId?(D.subjects.find(function(s){return s.id===mpId;})||{nama_mapel:mpId}).nama_mapel:'Semua Mapel')+
     (dari?' | '+dari:'')+' s/d '+(sampai?sampai:'sekarang');
 
@@ -4213,7 +4234,7 @@ function setWaliKelas(kelasId, guruId) {
   // Update navigation guru jika guru tersebut sedang login
   if(ME && ME.role==='guru') updateGuruConditionalNav();
   
-  var kl = D.classes.find(function(c){return c.id===kelasId;})||{nama_kelas:'Kelas'};
+  var kl = (findKelas(kelasId)||{nama_kelas:'Kelas'});
   var guruName = guruId ? (D.users.find(function(u){return u.id===guruId;})||{nama_lengkap:'Guru'}).nama_lengkap : 'Tidak ada';
   toast('Wali kelas '+kl.nama_kelas+' diperbarui: '+guruName,'s');
 }
@@ -4719,7 +4740,7 @@ function loadWaliTugas() {
 // =====================================================================
 function initTabunganGuru() {
   var kelasId = ME.wali_kelas_id;
-  var kl = D.classes.find(function(c){return c.id===kelasId;})||{nama_kelas:'–'};
+  var kl = (findKelas(kelasId)||{nama_kelas:'–'});
   document.getElementById('tabNamaKelas').textContent = kl.nama_kelas;
   var siswaList = D.users.filter(function(u){return u.role==='siswa'&&u.kelas_id===kelasId;});
   var fOpts = '<option value="">Semua Siswa</option>'+siswaList.map(function(u){return '<option value="'+u.id+'">'+u.nama_lengkap+'</option>';}).join('');
@@ -4895,7 +4916,7 @@ function renderEkskulAnggota() {
   var members = (D.ekskulMembers||[]).filter(function(m){return m.ekskul_id===ekskulId;});
   var html = members.map(function(m){
     var u = D.users.find(function(x){return x.id===m.siswa_id;})||{nama_lengkap:'?'};
-    var kl = D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'?'};
+    var kl = (findKelas(u.kelas_id)||{nama_kelas:'–'});
     return '<div class="flex jb aic" style="border-bottom:1px solid var(--gbr);padding:.4rem 0">'+
       '<div><strong style="font-size:.85rem">'+u.nama_lengkap+'</strong><span style="font-size:.72rem;color:var(--mt);margin-left:.5rem">'+kl.nama_kelas+'</span></div>'+
       '<button class="btn bd bsm" onclick="keluarkanAnggota(\''+m.id+'\')"><i class="fa-solid fa-user-xmark"></i></button></div>';
@@ -4907,7 +4928,7 @@ function openMTambahAnggotaEkskul() {
   var ekskulId = window._curEkskulId; if(!ekskulId) return;
   var existing = (D.ekskulMembers||[]).filter(function(m){return m.ekskul_id===ekskulId;}).map(function(m){return m.siswa_id;});
   var html = D.users.filter(function(u){return u.role==='siswa' && !existing.includes(u.id);}).map(function(u){
-    var kl = D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'?'};
+    var kl = (findKelas(u.kelas_id)||{nama_kelas:'–'});
     return '<option value="'+u.id+'">'+u.nama_lengkap+' ('+kl.nama_kelas+')</option>';
   }).join('');
   document.getElementById('anggotaEkskulSiswa').innerHTML = html;
@@ -5029,7 +5050,7 @@ function cetakNilaiEkskul() {
   var byKelas = {};
   members.forEach(function(m){
     var u  = D.users.find(function(x){return x.id===m.siswa_id;})||{nama_lengkap:'?',kelas_id:''};
-    var kl = D.classes.find(function(c){return c.id===u.kelas_id;})||{nama_kelas:'Tidak diketahui'};
+    var kl = (findKelas(u.kelas_id)||{nama_kelas:'Tidak diketahui'});
     var g  = (D.ekskulGrades||[]).find(function(x){return x.ekskul_id===ekskulId&&x.siswa_id===m.siswa_id;})||{nilai:'—',ket:'—'};
     if(!byKelas[kl.nama_kelas]) byKelas[kl.nama_kelas]=[];
     byKelas[kl.nama_kelas].push({nama:u.nama_lengkap, nilai:g.nilai||'—', ket:g.ket||'—'});
@@ -5158,7 +5179,7 @@ function renderUjianList() {
   if(!myUjians.length){ document.getElementById('ujianList').innerHTML='<p style="color:var(--mt)">Belum ada ujian. Klik "+ Buat Ujian" untuk memulai.</p>'; return; }
   var html = myUjians.map(function(u){
     var mp = D.subjects.find(function(s){return s.id===u.id_mapel;})||{nama_mapel:'?'};
-    var kl = D.classes.find(function(c){return c.id===u.id_kelas;})||{nama_kelas:'?'};
+    var kl = (findKelas(u.id_kelas)||{nama_kelas:'–'});
     var results = (D.examResults||[]).filter(function(r){return r.id_exam===u.id;});
     var selesai = results.filter(function(r){return r.status==='selesai';}).length;
     var total = D.users.filter(function(x){return x.role==='siswa'&&x.kelas_id===u.id_kelas;}).length;
@@ -5235,7 +5256,7 @@ function editUjian(id) {
     return mp ? '<option value="'+id+'">'+mp.nama_mapel+'</option>' : '';
   }).join('');
   document.getElementById('ujKelasF').innerHTML=klIds.map(function(id){
-    var kl=D.classes.find(function(c){return c.id===id;});
+    var kl=findKelas(id);
     return kl ? '<option value="'+id+'">'+kl.nama_kelas+'</option>' : '';
   }).join('');
   document.getElementById('ujMapelF').value=u.id_mapel;
@@ -5468,7 +5489,7 @@ function saveToBank() {
 function lihatHasilUjian(examId) {
   var exam=(D.exams||[]).find(function(e){return e.id===examId;}); if(!exam) return;
   var results=(D.examResults||[]).filter(function(r){return r.id_exam===examId&&r.status==='selesai';});
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
   var mp=D.subjects.find(function(s){return s.id===exam.id_mapel;})||{nama_mapel:'?'};
   var totalSiswa=D.users.filter(function(x){return x.role==='siswa'&&x.kelas_id===exam.id_kelas;}).length;
 
@@ -5546,7 +5567,7 @@ function renderHasilNilaiTab(exam, results, examId) {
   var ranked = results.map(function(r){
     return { r:r, u:D.users.find(function(x){return x.id===r.id_siswa;})||{nama_lengkap:'?'}, nilai:hitungNilaiAuto(exam,r) };
   }).sort(function(a,b){return b.nilai-a.nilai;});
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
 
   var html='<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.7rem">'+
     '<button class="btn bs bsm" onclick="downloadNilaiCSV(\''+examId+'\')"><i class="fa-solid fa-download"></i> Download CSV</button>'+
@@ -5577,7 +5598,7 @@ function downloadNilaiCSV(examId) {
   var ranked=results.map(function(r){
     return {r:r,u:D.users.find(function(x){return x.id===r.id_siswa;})||{nama_lengkap:'?'},nilai:hitungNilaiAuto(exam,r)};
   }).sort(function(a,b){return b.nilai-a.nilai;});
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
   var rows=[['Ranking','Nama Siswa','Nilai Auto','Nilai Essay','Lulus','Selesai']];
   ranked.forEach(function(item,i){
     rows.push([i+1,item.u.nama_lengkap,item.nilai,item.r.nilai_essay||'',item.nilai>=75?'Ya':'Tidak',item.r.selesai_at]);
@@ -5594,7 +5615,7 @@ function printNilaiRanking(examId) {
   var ranked=results.map(function(r){
     return {r:r,u:D.users.find(function(x){return x.id===r.id_siswa;})||{nama_lengkap:'?'},nilai:hitungNilaiAuto(exam,r)};
   }).sort(function(a,b){return b.nilai-a.nilai;});
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
   var mp=D.subjects.find(function(s){return s.id===exam.id_mapel;})||{nama_mapel:'?'};
   var vals=ranked.map(function(x){return x.nilai;});
   var avg=vals.length?Math.round(vals.reduce(function(a,b){return a+b;},0)/vals.length):0;
@@ -5626,7 +5647,7 @@ function printNilaiRanking(examId) {
 function renderHasilAnalisisTab(exam, results) {
   if(!results.length){ document.getElementById('hAnalisis').innerHTML='<p style="color:var(--mt)">Belum ada data hasil ujian untuk dianalisis.</p>'; return; }
   var tipeLbl={pg:'PG',pgk:'PGK',essay:'Essay',menjodoh:'Jodoh',salahbenar:'S/B'};
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
   var mp=D.subjects.find(function(s){return s.id===exam.id_mapel;})||{nama_mapel:'?'};
 
   // Precompute per-soal data
@@ -5719,7 +5740,7 @@ function printAnalisisSoal(examId) {
   var exam=(D.exams||[]).find(function(e){return e.id===examId;}); if(!exam) return;
   var results=(D.examResults||[]).filter(function(r){return r.id_exam===examId&&r.status==='selesai';});
   if(!results.length){toast('Belum ada hasil ujian','w');return;}
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
   var mp=D.subjects.find(function(s){return s.id===exam.id_mapel;})||{nama_mapel:'?'};
   var tipeLbl={pg:'PG',pgk:'PGK',essay:'Essay',menjodoh:'Jodoh',salahbenar:'S/B'};
   var rows=(window._analisisData||[]).map(function(d,i){
@@ -6231,7 +6252,7 @@ function mulaiUjian(examId) {
 
 function bukaOverlayUjian(exam, result) {
   var mp=D.subjects.find(function(s){return s.id===exam.id_mapel;})||{nama_mapel:'?'};
-  var kl=D.classes.find(function(c){return c.id===exam.id_kelas;})||{nama_kelas:'?'};
+  var kl=(findKelas(exam.id_kelas)||{nama_kelas:'–'});
   document.getElementById('ujJudul').textContent=exam.judul;
   document.getElementById('ujMapelKelas').textContent=mp.nama_mapel+' • '+kl.nama_kelas;
   window._curSoalIdx = 0;
