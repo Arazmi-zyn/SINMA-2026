@@ -3214,14 +3214,20 @@ function rGrSiswa() {
     if(fKl && t.id_kelas!==fKl) return;
     if(fMp && t.id_mapel!==fMp) return;
     D.users.forEach(function(u){
-      if(u.role!=='siswa'||u.kelas_id!==t.id_kelas) return;
-      if(!siswaMap[u.id]) siswaMap[u.id]={u:u,mapels:[],kelas_id:u.kelas_id};
+      // Cocokkan dengan string trim untuk antisipasi whitespace/type mismatch
+      if(u.role!=='siswa') return;
+      var uKelasId = String(u.kelas_id||'').trim();
+      var tKelasId = String(t.id_kelas||'').trim();
+      if(uKelasId!==tKelasId) return;
+      // Gunakan t.id_kelas (dari teacherSubjects, pasti cocok dengan D.classes) sebagai kelas_id
+      if(!siswaMap[u.id]) siswaMap[u.id]={u:u,mapels:[],kelas_id:t.id_kelas};
       if(!siswaMap[u.id].mapels.find(function(m){return m.id_mapel===t.id_mapel;}))
         siswaMap[u.id].mapels.push({id_mapel:t.id_mapel,id_kelas:t.id_kelas});
     });
     (t.extra_siswa||[]).forEach(function(ex){
       var u=D.users.find(function(x){return x.id===ex.id_siswa;}); if(!u) return;
-      if(!siswaMap[u.id]) siswaMap[u.id]={u:u,mapels:[],kelas_id:u.kelas_id||t.id_kelas};
+      // Gunakan t.id_kelas sebagai kelas_id agar pasti cocok dengan D.classes
+      if(!siswaMap[u.id]) siswaMap[u.id]={u:u,mapels:[],kelas_id:t.id_kelas};
       if(!siswaMap[u.id].mapels.find(function(m){return m.id_mapel===t.id_mapel;}))
         siswaMap[u.id].mapels.push({id_mapel:t.id_mapel,id_kelas:t.id_kelas});
     });
@@ -3256,7 +3262,18 @@ function rGrSiswa() {
     return;
   }
   tb.innerHTML=rows.map(function(r,i){
-    var kl=D.classes.find(function(c){return c.id===r.kelas_id;})||{nama_kelas:'?'};
+    // Cari kelas: strict match dulu, fallback ke string comparison, lalu dari teacherSubjects
+    var kl = D.classes.find(function(c){return c.id===r.kelas_id;});
+    if(!kl && r.kelas_id) {
+      // Fallback 1: string trim comparison (antisipasi whitespace/tipe berbeda)
+      kl = D.classes.find(function(c){return String(c.id).trim()===String(r.kelas_id).trim();});
+    }
+    if(!kl && r.mapels && r.mapels.length) {
+      // Fallback 2: ambil dari teacherSubjects berdasarkan id_kelas penugasan guru
+      var tsForSiswa = ts.find(function(t){return t.id_kelas===r.mapels[0].id_kelas;});
+      if(tsForSiswa) kl = D.classes.find(function(c){return c.id===tsForSiswa.id_kelas;});
+    }
+    if(!kl) kl = {nama_kelas: r.kelas_id ? '('+String(r.kelas_id).substring(0,8)+')' : '?'};
     var mapelBadges=r.mapels.map(function(m){
       var mp=D.subjects.find(function(s){return s.id===m.id_mapel;})||{kode_mapel:'?',nama_mapel:'?'};
       return '<span class="badge bPu" style="margin:2px" title="'+mp.nama_mapel+'">'+mp.kode_mapel+'</span>';
