@@ -17,6 +17,23 @@ var _assignGuruId = null; // for assign mapel modal
 var _curAbsenTS = null;   // current absence being edited
 var _pendingFotoSaves = {}; // {userId: b64} — foto yang menunggu disimpan ke server
 var _isSyncing = false;     // Flag: sedang sync ke server → blokir background refresh
+var _pendingChanges = false; // Flag: ada perubahan belum tersimpan → blokir background refresh overwrite
+
+// =====================================================================
+// PERBAIKAN BUG: DEBOUNCE HELPER (Perbaikan #1)
+// Mencegah race condition antara user edit dan background sync
+// =====================================================================
+var _syncDebounceTimer = null;
+var _syncQueuePending = false;
+
+function debouncedSyncServer(delay, onDone) {
+  _syncQueuePending = true;
+  if (_syncDebounceTimer) clearTimeout(_syncDebounceTimer);
+  _syncDebounceTimer = setTimeout(function() {
+    _syncQueuePending = false;
+    syncServer(onDone);
+  }, delay || 1500);
+}
 
 // =====================================================================
 // LOADING — PERBAIKAN UTAMA
@@ -294,10 +311,22 @@ function _syncGASBackground() {
     console.log('[BG SYNC] Skip — sedang sync ke server');
     return;
   }
+  // PERBAIKAN BUG: Jika ada perubahan pending (user baru saja edit data),
+  // tunda background refresh agar perubahan tidak tertimpa data lama dari server
+  if (_pendingChanges) {
+    console.log('[BG SYNC] Skip — ada perubahan pending');
+    return;
+  }
+  // PERBAIKAN BUG (Perbaikan #2): Cek juga queue debounce
+  if (_syncQueuePending) {
+    console.log('[BG SYNC] Skip — sync dalam antrian debounce');
+    return;
+  }
+  
   callGAS('initLoad', null, function(res) {
     // Double-check: batalkan jika sync dimulai saat request ini sedang berjalan
-    if (_isSyncing) {
-      console.log('[BG SYNC] Dibatalkan — sync sedang berlangsung saat response tiba');
+    if (_isSyncing || _pendingChanges || _syncQueuePending) {
+      console.log('[BG SYNC] Dibatalkan — sync/perubahan/queue pending saat response tiba');
       return;
     }
     if (res && res.success && res.data) {
@@ -365,7 +394,8 @@ function syncServer(onDone) {
     return;
   }
 
-  _isSyncing = true; // blokir _syncGASBackground selama sync berlangsung
+  _isSyncing = true;     // blokir _syncGASBackground selama sync berlangsung
+  _pendingChanges = false; // perubahan sedang dikirim, clear flag pending
 
   // Strip foto dari payload data biasa (foto dikirim via fotoUpdates jika ada pending)
   var safeD = JSON.parse(JSON.stringify(D, function(k, v) {
@@ -388,6 +418,8 @@ function syncServer(onDone) {
 
   callGASPost('syncData', payload,
     function(res) {
+      if (res && res.success) {
+      _pendingChanges = false;  // PERBAIKAN BUG: Clear flag setelah sukses
       _isSyncing = false;
       if (res && res.success) {
         if (fotoUpdates.length > 0) {
@@ -398,11 +430,15 @@ function syncServer(onDone) {
         }
       } else {
         console.warn('[SYNC] Respons tidak sukses:', res);
+        // Jika gagal simpan, tandai perubahan masih pending agar bg sync tidak overwrite
+        _pendingChanges = true;
       }
       if (onDone) onDone(res);
     },
     function(e) {
       _isSyncing = false;
+      // Jika jaringan error, tandai perubahan masih pending
+      _pendingChanges = true;
       console.warn('[SYNC] syncServer error:', e);
       if (onDone) onDone(null);
     }
@@ -667,6 +703,15 @@ function afterLogin() {
     }
     if (ME && ME.role === 'siswa') updateSiswaConditionalNav();
   }, 2000);
+  
+  // PERBAIKAN BUG: Setup background sync setiap 30 detik (Perbaikan #4)
+  if (_timerLoop) clearInterval(_timerLoop);
+  _timerLoop = setInterval(function() {
+    if (!_isSyncing && !_pendingChanges && !_syncQueuePending) {
+      console.log('[BG SYNC] Running scheduled sync...');
+      _syncGASBackground();
+    }
+  }, 30000); // 30 detik
 }
 
 function doLogout() {
@@ -974,7 +1019,7 @@ function _saveFotoToServer(userId, b64, onDone) {
   });
 }
 
-/** Kirim foto pending ke server — hanya foto saja, data lain dikirm via syncServer */
+/** Kirim foto pending ke server — hanya foto saja, data lain dikirim via syncServer */
 function _syncFotoNow(onDone) {
   var fotoUpdates = [];
   Object.keys(_pendingFotoSaves).forEach(function(uid) {
@@ -986,18 +1031,16 @@ function _syncFotoNow(onDone) {
     return;
   }
 
-  // Kirim HANYA fotoUpdates + minimal data (tanpa seluruh D)
-  // Ini jauh lebih kecil dari syncData biasa → tidak timeout
+  // PERBAIKAN BUG KRITIS:
+  // Sebelumnya: mengirim data:{ users:[], classes:[], ... } → server menghapus semua data!
+  // Sekarang: kirim flag fotoOnly:true → server hanya update Photos sheet, TIDAK menyentuh data utama
   var payload = JSON.stringify({
-    data: { users: [], classes: [], subjects: [], grades: [], tasks: [],
-            submissions: [], teacherSubjects: [], journals: [], absences: [],
-            bankSoal: [], exams: [], examResults: [], ekskuls: [],
-            ekskulMembers: [], ekskulAbsences: [], ekskulGrades: [], tabunganTx: [] },
+    fotoOnly: true,   // ← flag penting: server hanya simpan foto, TIDAK timpa data utama
     cfg: CFG,
     fotoUpdates: fotoUpdates
   });
 
-  console.log('[FOTO] Mengirim', fotoUpdates.length, 'foto, payload:', payload.length, 'bytes');
+  console.log('[FOTO] Mengirim', fotoUpdates.length, 'foto (foto-only mode), payload:', payload.length, 'bytes');
 
   callGASPost('syncData', payload,
     function(res) {
@@ -1515,10 +1558,14 @@ function saveSiswa(e) {
   }
   closeM('mSiswa');
   rSiswa();
+  _pendingChanges = true;
+  toast('Menyimpan...','i');
+  
   if(fotoVal) {
-    _saveFotoToServer(targetId, fotoVal, function(ok){ syncServer(function(res){ toast(res&&res.success ? 'Data siswa & foto disimpan ✅' : 'Gagal simpan ke server!', res&&res.success?'s':'e'); }); });
+    _saveFotoToServer(targetId, fotoVal, function(ok){ 
+      debouncedSyncServer(1500, function(res){ toast(res&&res.success ? 'Data siswa & foto disimpan ✅' : 'Gagal simpan ke server!', res&&res.success?'s':'e'); }); });
   } else {
-    toast('Menyimpan...','i'); syncServer(function(res){ toast(res&&res.success ? 'Data siswa disimpan ✅' : 'Gagal simpan!', res&&res.success?'s':'e'); }); }
+    debouncedSyncServer(1500, function(res){ toast(res&&res.success ? 'Data siswa disimpan ✅' : 'Gagal simpan!', res&&res.success?'s':'e'); }); }
 }
 
 // --- Modal ganti foto tersendiri (tombol kamera di tabel) ---
@@ -1549,17 +1596,39 @@ function saveMfsFoto() {
   var id=document.getElementById('mfsSiswaId').value;
   var img=document.getElementById('mfsFotoImg');
   var b64 = img.dataset.newFoto || (img.style.display!=='none' ? img.src : '');
-  var idx=D.users.findIndex(function(u){return u.id===id;}); if(idx<0) return;
+  
+  var idx=D.users.findIndex(function(u){return u.id===id;});
+  if(idx<0) return;
   D.users[idx].foto = b64;
+  
   delete img.dataset.newFoto;
   closeM('mFotoSiswa');
+  
+  // PERBAIKAN BUG: Set pending dan sync lengkap (Perbaikan #6)
+  _pendingChanges = true;
+  toast('Menyimpan foto...', 'i');
+  
   if(b64) {
     _saveFotoToServer(id, b64, function(){
-      rSiswa(); toast('Foto siswa HD disimpan ✓','s');
+      syncServer(function(res) {
+        rSiswa();
+        if (res && res.success) {
+          toast('Foto siswa HD disimpan ✓','s');
+        } else {
+          toast('Foto tersimpan, tapi sync data gagal!','e');
+        }
+      });
     });
   } else {
     _removeFotoFromServer(id, function(){
-      rSiswa(); toast('Foto siswa dihapus','s');
+      syncServer(function(res) {
+        rSiswa();
+        if (res && res.success) {
+          toast('Foto siswa dihapus','s');
+        } else {
+          toast('Foto dihapus, tapi sync data gagal!','e');
+        }
+      });
     });
   }
 }
@@ -1579,11 +1648,39 @@ function viewFotoSiswa(id) {
   openM('mViewFoto');
 }
 function delSiswa(id) {
-  if(!confirm('Hapus siswa ini?')) return;
+  if(!confirm('Hapus siswa ini? Data nilai dan tugas juga akan terhapus!')) return;
+  
+  // PERBAIKAN BUG: Backup data untuk rollback (Perbaikan #7)
+  var oldUsers = JSON.parse(JSON.stringify(D.users));
+  var oldGrades = JSON.parse(JSON.stringify(D.grades));
+  var oldSubmissions = JSON.parse(JSON.stringify(D.submissions));
+  
   D.users = D.users.filter(function(u) { return u.id!==id; });
   D.grades = D.grades.filter(function(g) { return g.id_siswa!==id; });
   D.submissions = D.submissions.filter(function(s) { return s.id_siswa!==id; });
-  syncServer(); rSiswa(); toast('Siswa dihapus','s');
+  
+  rSiswa();
+  
+  _pendingChanges = true;
+  toast('Menghapus siswa...', 'i');
+  
+  syncServer(function(res) {
+    if (res && res.success) {
+      toast('Siswa berhasil dihapus ✅', 's');
+      _removeFotoFromServer(id, function(){
+        console.log('[DELETE] Foto siswa juga dihapus dari server');
+      });
+    } else {
+      // Rollback jika gagal
+      console.error('[DELETE] Gagal hapus, rollback data...');
+      D.users = oldUsers;
+      D.grades = oldGrades;
+      D.submissions = oldSubmissions;
+      rSiswa();
+      toast('Gagal menghapus siswa! Data dikembalikan.', 'e');
+      _pendingChanges = false;
+    }
+  });
 }
 
 // =====================================================================
@@ -1691,6 +1788,7 @@ function delKelas(id) {
   if(!confirm('Hapus kelas ini?')) return;
   D.classes = D.classes.filter(function(c) { return c.id!==id; });
   D.users.forEach(function(u) { if(u.kelas_id===id) u.kelas_id=''; });
+  _pendingChanges = true;
   syncServer(); rKelas(); toast('Kelas dihapus','s');
 }
 
@@ -2354,10 +2452,24 @@ function saveNilaiTugas(e) {
       var gi=D.grades.findIndex(function(gg){return gg.id_siswa===s.id_siswa&&gg.id_mapel===t.id_mapel&&gg.semester==sem&&(tahun===''||gg.tahun_ajaran===tahun);});
       if(gi>=0){
         var kdi=(D.grades[gi].kd||[]).findIndex(function(k){return k.label===kdTarget;});
-        if(kdi>=0){ D.grades[gi].kd[kdi].entries=D.grades[gi].kd[kdi].entries||[]; D.grades[gi].kd[kdi].entries.push({nilai:s.nilai_tugas,note:'Dari tugas'}); toast('Nilai tugas ditautkan ke '+kdTarget,'s'); }
+        if(kdi>=0){
+          D.grades[gi].kd[kdi].entries=D.grades[gi].kd[kdi].entries||[];
+          // PERBAIKAN BUG: Cek duplikasi — jangan tambahkan nilai tugas yang sama dua kali
+          // Sebelumnya: push tanpa cek → setiap kali guru buka & simpan nilai tugas, nilai KD bertambah
+          var alreadyLinked = D.grades[gi].kd[kdi].entries.some(function(e){
+            return e.note === 'Dari tugas' && e.nilai === s.nilai_tugas;
+          });
+          if(!alreadyLinked){
+            D.grades[gi].kd[kdi].entries.push({nilai:s.nilai_tugas,note:'Dari tugas'});
+            toast('Nilai tugas ditautkan ke '+kdTarget,'s');
+          } else {
+            toast('Nilai tugas sudah ditautkan sebelumnya ke '+kdTarget,'i');
+          }
+        }
       }
     }
   }
+  _pendingChanges = true; // tandai ada perubahan sebelum syncServer
   closeM('mNT'); syncServer(); rKumpul(); toast('Nilai tugas disimpan','s');
 }
 
