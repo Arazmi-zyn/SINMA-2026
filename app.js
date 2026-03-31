@@ -20,19 +20,51 @@ var _isSyncing = false;     // Flag: sedang sync ke server → blokir background
 var _pendingChanges = false; // Flag: ada perubahan belum tersimpan → blokir background refresh overwrite
 
 // =====================================================================
-// PERBAIKAN BUG: DEBOUNCE HELPER (Perbaikan #1)
-// Mencegah race condition antara user edit dan background sync
+// PERLINDUNGAN DATA: SYNC QUEUE + DEBOUNCE
+// Mencegah: (1) race condition antar sync, (2) sync ganda bersamaan,
+//           (3) background sync menimpa data yang belum tersimpan
 // =====================================================================
-var _syncDebounceTimer = null;
-var _syncQueuePending = false;
+var _syncQueue = [];          // Antrian callback onDone yang menunggu sync
+var _syncDebounceTimer = null; // Timer untuk debounce panggilan syncServer
+var _syncVersion = 0;          // Versi data: naik setiap kali ada perubahan lokal
+var _lastServerVersion = 0;    // Versi data yang terakhir berhasil disimpan ke server
+var _isLoggingOut = false;     // Flag: sedang proses logout
 
+/**
+ * DEBOUNCED SYNC — gunakan ini untuk operasi CRUD biasa.
+ * Menggabungkan banyak perubahan dalam waktu dekat menjadi 1 request ke server.
+ * @param {number} delay  - Jeda dalam ms sebelum kirim (default 1200ms)
+ * @param {function} onDone - Callback setelah sync selesai
+ */
 function debouncedSyncServer(delay, onDone) {
-  _syncQueuePending = true;
+  _pendingChanges = true;
+  _syncVersion++;
   if (_syncDebounceTimer) clearTimeout(_syncDebounceTimer);
   _syncDebounceTimer = setTimeout(function() {
-    _syncQueuePending = false;
+    _syncDebounceTimer = null;
     syncServer(onDone);
-  }, delay || 1500);
+  }, delay != null ? delay : 1200);
+}
+
+/**
+ * Guard helper: cek apakah data D valid sebelum dikirim ke server.
+ * Mencegah pengiriman data kosong yang akan menghapus semua data di sheet.
+ */
+function _isDValid() {
+  // Jika D.users tidak ada atau kosong padahal seharusnya tidak, tolak sync
+  // (Pengecualian: jika memang sengaja hapus semua user, tidak akan masuk sini
+  //  karena operasi hapus sudah konfirmasi dulu)
+  if (!D || typeof D !== 'object') {
+    console.error('[GUARD] D tidak valid — sync dibatalkan!');
+    return false;
+  }
+  // Cegah sync jika semua array penting kosong sekaligus (indikasi data belum dimuat)
+  var totalItems = (D.users||[]).length + (D.classes||[]).length + (D.subjects||[]).length;
+  if (totalItems === 0 && !_isLoggingOut) {
+    console.warn('[GUARD] Semua data utama kosong — sync ditunda. Data mungkin belum termuat dari server.');
+    return false;
+  }
+  return true;
 }
 
 // =====================================================================
@@ -305,28 +337,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function _syncGASBackground() {
   if (!GAS_URL) return;
+  // Jangan refresh dari server jika sedang logout
+  if (_isLoggingOut) return;
+  // Jangan refresh dari server jika user belum login
+  if (!ME) return;
   // Jangan refresh dari server jika sedang ada sync yang belum selesai
-  // Ini mencegah data baru yang belum tersimpan tertimpa oleh data lama dari server
   if (_isSyncing) {
     console.log('[BG SYNC] Skip — sedang sync ke server');
     return;
   }
-  // PERBAIKAN BUG: Jika ada perubahan pending (user baru saja edit data),
-  // tunda background refresh agar perubahan tidak tertimpa data lama dari server
+  // Jika ada perubahan pending, tunda background refresh agar tidak menimpa data baru
   if (_pendingChanges) {
-    console.log('[BG SYNC] Skip — ada perubahan pending');
+    console.log('[BG SYNC] Skip — ada perubahan pending yang belum disimpan ke server');
     return;
   }
-  // PERBAIKAN BUG (Perbaikan #2): Cek juga queue debounce
-  if (_syncQueuePending) {
-    console.log('[BG SYNC] Skip — sync dalam antrian debounce');
+  // Jika ada debounce timer aktif (user sedang mengetik/edit), tunda
+  if (_syncDebounceTimer) {
+    console.log('[BG SYNC] Skip — debounce timer aktif');
     return;
   }
-  
   callGAS('initLoad', null, function(res) {
-    // Double-check: batalkan jika sync dimulai saat request ini sedang berjalan
-    if (_isSyncing || _pendingChanges || _syncQueuePending) {
-      console.log('[BG SYNC] Dibatalkan — sync/perubahan/queue pending saat response tiba');
+    // Double-check setelah response datang: batalkan jika ada perubahan baru
+    if (_isSyncing || _pendingChanges || _isLoggingOut || !ME || _syncDebounceTimer) {
+      console.log('[BG SYNC] Dibatalkan — kondisi berubah saat request berjalan');
       return;
     }
     if (res && res.success && res.data) {
@@ -394,8 +427,23 @@ function syncServer(onDone) {
     return;
   }
 
-  _isSyncing = true;     // blokir _syncGASBackground selama sync berlangsung
-  _pendingChanges = false; // perubahan sedang dikirim, clear flag pending
+  // === GUARD: Jangan kirim data kosong ke server ===
+  if (!_isDValid()) {
+    console.warn('[SYNC] Dibatalkan — data tidak valid atau belum siap.');
+    if (onDone) onDone(null);
+    return;
+  }
+
+  // === QUEUE: Jika sudah ada sync berjalan, antri callback dan keluar ===
+  if (_isSyncing) {
+    console.log('[SYNC] Sudah ada sync berjalan — callback masuk antrian');
+    if (onDone) _syncQueue.push(onDone);
+    return;
+  }
+
+  _isSyncing = true;          // blokir _syncGASBackground selama sync berlangsung
+  _pendingChanges = false;    // perubahan sedang dikirim
+  var versionSent = _syncVersion; // catat versi data yang dikirim
 
   // Strip foto dari payload data biasa (foto dikirim via fotoUpdates jika ada pending)
   var safeD = JSON.parse(JSON.stringify(D, function(k, v) {
@@ -408,8 +456,6 @@ function syncServer(onDone) {
     fotoUpdates.push({ userId: uid, b64: _pendingFotoSaves[uid] });
   });
 
-  // payload ini akan dibungkus callGASPost menjadi { fn: 'syncData', data: payload }
-  // doPost akan membaca body.data, lalu _handleSyncData akan parse JSON-nya
   var payload = JSON.stringify({
     data: safeD,
     cfg: CFG,
@@ -418,29 +464,38 @@ function syncServer(onDone) {
 
   callGASPost('syncData', payload,
     function(res) {
-      if (res && res.success) {
-      _pendingChanges = false;  // PERBAIKAN BUG: Clear flag setelah sukses
       _isSyncing = false;
       if (res && res.success) {
+        _lastServerVersion = versionSent; // catat versi yang berhasil tersimpan
         if (fotoUpdates.length > 0) {
           _pendingFotoSaves = {};
           console.log('[SYNC] OK + foto tersimpan:', res.fotoCount || 0);
         } else {
-          console.log('[SYNC] OK — data tersimpan ke Google Sheets');
+          console.log('[SYNC] OK — data tersimpan ke Google Sheets (v' + versionSent + ')');
+        }
+        // Jika ada perubahan baru yang masuk saat sync sedang berjalan, sync ulang
+        if (_syncVersion > versionSent) {
+          console.log('[SYNC] Ada perubahan baru saat sync — jalankan sync lanjutan');
+          setTimeout(function() { syncServer(); }, 500);
         }
       } else {
-        console.warn('[SYNC] Respons tidak sukses:', res);
-        // Jika gagal simpan, tandai perubahan masih pending agar bg sync tidak overwrite
+        // Sync gagal: tandai data masih perlu disimpan
         _pendingChanges = true;
+        console.warn('[SYNC] Respons tidak sukses:', res);
       }
       if (onDone) onDone(res);
+      // Jalankan semua callback yang antri
+      var queue = _syncQueue.splice(0);
+      queue.forEach(function(cb) { try { cb(res); } catch(e) {} });
     },
     function(e) {
       _isSyncing = false;
-      // Jika jaringan error, tandai perubahan masih pending
-      _pendingChanges = true;
+      _pendingChanges = true; // data masih perlu disimpan
       console.warn('[SYNC] syncServer error:', e);
       if (onDone) onDone(null);
+      // Jalankan semua callback antri dengan null
+      var queue = _syncQueue.splice(0);
+      queue.forEach(function(cb) { try { cb(null); } catch(e) {} });
     }
   );
 }
@@ -703,21 +758,23 @@ function afterLogin() {
     }
     if (ME && ME.role === 'siswa') updateSiswaConditionalNav();
   }, 2000);
-  
-  // PERBAIKAN BUG: Setup background sync setiap 30 detik (Perbaikan #4)
-  if (_timerLoop) clearInterval(_timerLoop);
-  _timerLoop = setInterval(function() {
-    if (!_isSyncing && !_pendingChanges && !_syncQueuePending) {
-      console.log('[BG SYNC] Running scheduled sync...');
-      _syncGASBackground();
-    }
-  }, 30000); // 30 detik
 }
 
 function doLogout() {
+  // Tandai sedang logout agar background sync tidak berjalan
+  _isLoggingOut = true;
+  // Cancel debounce timer jika ada perubahan yang belum dikirim
+  if (_syncDebounceTimer) {
+    clearTimeout(_syncDebounceTimer);
+    _syncDebounceTimer = null;
+  }
   // Sync data ke server sebelum logout
   var _performLogout = function() {
     ME = null;
+    _isLoggingOut = false;
+    _pendingChanges = false;
+    _isSyncing = false;
+    _syncQueue = [];
     D = { users:[], classes:[], subjects:[], grades:[], tasks:[], submissions:[], teacherSubjects:[], journals:[], absences:[], ekskuls:[], ekskulMembers:[], ekskulAbsences:[], ekskulGrades:[], exams:[], examResults:[], bankSoal:[], tabunganTx:[] };
     CFG = { appName:'SINMA 2026', schoolName:'SMA Negeri Unggulan', logoIcon:'fa-solid fa-graduation-cap', logoImg:'', bobotKD:70, bobotUjian:30 };
     document.getElementById('adminD').classList.add('hidden');
@@ -881,8 +938,14 @@ function konfirmasiHapus(target, label) {
       if(target==='jurnal')  { D.journals=[]; }
       if(target==='absensi') { D.absences=[]; }
       if(target==='semua')   { D.grades=[]; D.tasks=[]; D.submissions=[]; D.journals=[]; D.absences=[]; }
-      syncServer(); rAdmStats();
-      toast(label+' berhasil dihapus','s');
+      _pendingChanges = true; _syncVersion++;
+      // Set flag logout sementara agar _isDValid tidak blokir (data sengaja dikosongkan)
+      _isLoggingOut = true;
+      syncServer(function(res){
+        _isLoggingOut = false;
+        rAdmStats();
+        toast(label+' berhasil dihapus ✅','s');
+      });
     } else {
       toast('Gagal menghapus: '+(msg||''),'e');
     }
@@ -1152,6 +1215,7 @@ function saveGrUsername() {
   if(idx>=0) D.users[idx].username = newU;
   document.getElementById('grName').textContent = ME.nama_lengkap || newU;
   document.getElementById('grSetUsername').textContent = '@' + newU;
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Username berhasil diubah','s');
 }
 function saveGrPassword() {
@@ -1170,6 +1234,7 @@ function saveGrPassword() {
   document.getElementById('grOldPass').value='';
   document.getElementById('grNewPass').value='';
   document.getElementById('grConfPass').value='';
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Password berhasil diubah','s');
 }
 
@@ -1220,6 +1285,7 @@ function saveStuUsername() {
   var idx = D.users.findIndex(function(u){return u.id===ME.id;});
   if(idx>=0) D.users[idx].username = newU;
   document.getElementById('stuSetNama').textContent = ME.nama_lengkap || newU;
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Username berhasil diubah','s');
 }
 function saveStuPassword() {
@@ -1238,6 +1304,7 @@ function saveStuPassword() {
   document.getElementById('stuOldPass').value='';
   document.getElementById('stuNewPass').value='';
   document.getElementById('stuConfPass').value='';
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Password berhasil diubah','s');
 }
 
@@ -1559,13 +1626,11 @@ function saveSiswa(e) {
   closeM('mSiswa');
   rSiswa();
   _pendingChanges = true;
-  toast('Menyimpan...','i');
-  
+  _syncVersion++;
   if(fotoVal) {
-    _saveFotoToServer(targetId, fotoVal, function(ok){ 
-      debouncedSyncServer(1500, function(res){ toast(res&&res.success ? 'Data siswa & foto disimpan ✅' : 'Gagal simpan ke server!', res&&res.success?'s':'e'); }); });
+    _saveFotoToServer(targetId, fotoVal, function(ok){ syncServer(function(res){ toast(res&&res.success ? 'Data siswa & foto disimpan ✅' : 'Gagal simpan ke server!', res&&res.success?'s':'e'); }); });
   } else {
-    debouncedSyncServer(1500, function(res){ toast(res&&res.success ? 'Data siswa disimpan ✅' : 'Gagal simpan!', res&&res.success?'s':'e'); }); }
+    toast('Menyimpan...','i'); syncServer(function(res){ toast(res&&res.success ? 'Data siswa disimpan ✅' : 'Gagal simpan!', res&&res.success?'s':'e'); }); }
 }
 
 // --- Modal ganti foto tersendiri (tombol kamera di tabel) ---
@@ -1596,39 +1661,17 @@ function saveMfsFoto() {
   var id=document.getElementById('mfsSiswaId').value;
   var img=document.getElementById('mfsFotoImg');
   var b64 = img.dataset.newFoto || (img.style.display!=='none' ? img.src : '');
-  
-  var idx=D.users.findIndex(function(u){return u.id===id;});
-  if(idx<0) return;
+  var idx=D.users.findIndex(function(u){return u.id===id;}); if(idx<0) return;
   D.users[idx].foto = b64;
-  
   delete img.dataset.newFoto;
   closeM('mFotoSiswa');
-  
-  // PERBAIKAN BUG: Set pending dan sync lengkap (Perbaikan #6)
-  _pendingChanges = true;
-  toast('Menyimpan foto...', 'i');
-  
   if(b64) {
     _saveFotoToServer(id, b64, function(){
-      syncServer(function(res) {
-        rSiswa();
-        if (res && res.success) {
-          toast('Foto siswa HD disimpan ✓','s');
-        } else {
-          toast('Foto tersimpan, tapi sync data gagal!','e');
-        }
-      });
+      rSiswa(); toast('Foto siswa HD disimpan ✓','s');
     });
   } else {
     _removeFotoFromServer(id, function(){
-      syncServer(function(res) {
-        rSiswa();
-        if (res && res.success) {
-          toast('Foto siswa dihapus','s');
-        } else {
-          toast('Foto dihapus, tapi sync data gagal!','e');
-        }
-      });
+      rSiswa(); toast('Foto siswa dihapus','s');
     });
   }
 }
@@ -1648,39 +1691,14 @@ function viewFotoSiswa(id) {
   openM('mViewFoto');
 }
 function delSiswa(id) {
-  if(!confirm('Hapus siswa ini? Data nilai dan tugas juga akan terhapus!')) return;
-  
-  // PERBAIKAN BUG: Backup data untuk rollback (Perbaikan #7)
-  var oldUsers = JSON.parse(JSON.stringify(D.users));
-  var oldGrades = JSON.parse(JSON.stringify(D.grades));
-  var oldSubmissions = JSON.parse(JSON.stringify(D.submissions));
-  
+  if(!confirm('Hapus siswa ini?')) return;
   D.users = D.users.filter(function(u) { return u.id!==id; });
   D.grades = D.grades.filter(function(g) { return g.id_siswa!==id; });
   D.submissions = D.submissions.filter(function(s) { return s.id_siswa!==id; });
-  
-  rSiswa();
-  
   _pendingChanges = true;
-  toast('Menghapus siswa...', 'i');
-  
-  syncServer(function(res) {
-    if (res && res.success) {
-      toast('Siswa berhasil dihapus ✅', 's');
-      _removeFotoFromServer(id, function(){
-        console.log('[DELETE] Foto siswa juga dihapus dari server');
-      });
-    } else {
-      // Rollback jika gagal
-      console.error('[DELETE] Gagal hapus, rollback data...');
-      D.users = oldUsers;
-      D.grades = oldGrades;
-      D.submissions = oldSubmissions;
-      rSiswa();
-      toast('Gagal menghapus siswa! Data dikembalikan.', 'e');
-      _pendingChanges = false;
-    }
-  });
+  _syncVersion++;
+  rSiswa();
+  syncServer(function(res){ toast(res&&res.success ? 'Siswa dihapus ✅' : 'Siswa dihapus (gagal sync ke server)', res&&res.success?'s':'e'); });
 }
 
 // =====================================================================
@@ -1781,15 +1799,20 @@ function saveKelas(e) {
     updateGuruConditionalNav();
   }
   
-  closeM('mKelas'); syncServer(); rKelas(); 
-  toast('Kelas "'+ namaKelas +'" disimpan' + (waliGuruId ? ' dengan wali kelas' : ''),'s');
+  closeM('mKelas');
+  _pendingChanges = true;
+  _syncVersion++;
+  syncServer(function(res){ toast(res&&res.success ? 'Kelas "'+ namaKelas +'" disimpan ✅' + (waliGuruId ? ' dengan wali kelas' : '') : 'Gagal simpan kelas!', res&&res.success?'s':'e'); });
+  rKelas();
 }
 function delKelas(id) {
   if(!confirm('Hapus kelas ini?')) return;
   D.classes = D.classes.filter(function(c) { return c.id!==id; });
   D.users.forEach(function(u) { if(u.kelas_id===id) u.kelas_id=''; });
   _pendingChanges = true;
-  syncServer(); rKelas(); toast('Kelas dihapus','s');
+  _syncVersion++;
+  syncServer(function(res){ toast(res&&res.success ? 'Kelas dihapus ✅' : 'Kelas dihapus (gagal sync)', res&&res.success?'s':'e'); });
+  rKelas();
 }
 
 // =====================================================================
@@ -1820,7 +1843,8 @@ function updGlbBobot() {
 function saveGlbBobot() {
   CFG.bobotKD=Number(document.getElementById('glbKD').value)||70;
   CFG.bobotUjian=Number(document.getElementById('glbUj').value)||30;
-  syncServer(); toast('Bobot global disimpan','s'); rMapel();
+  _pendingChanges = true; _syncVersion++;
+  syncServer(function(res){ toast(res&&res.success?'Bobot global disimpan ✅':'Gagal simpan bobot!',res&&res.success?'s':'e'); }); rMapel();
 }
 function updMapelBobot() {
   var kd=document.getElementById('mpBKD').value; var uj=document.getElementById('mpBUj').value;
@@ -1850,13 +1874,15 @@ function saveMapel(e) {
   var obj={kode_mapel:document.getElementById('mpKode').value.trim().toUpperCase(),nama_mapel:document.getElementById('mpNama').value.trim(),bobotKD:(bkd!=='')?Number(bkd):null,bobotUjian:(buj!=='')?Number(buj):null};
   if(id){var idx=D.subjects.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.subjects[idx],obj);}
   else{D.subjects.push(Object.assign({id:genID()},obj));}
-  closeM('mMapel'); syncServer(); rMapel(); toast('Mapel disimpan','s');
+  _pendingChanges = true; _syncVersion++;
+  closeM('mMapel'); syncServer(function(res){ toast(res&&res.success?'Mapel disimpan ✅':'Gagal simpan mapel!',res&&res.success?'s':'e'); }); rMapel();
 }
 function delMapel(id) {
   if(!confirm('Hapus mapel ini?')) return;
   D.subjects=D.subjects.filter(function(s){return s.id!==id;});
   D.grades=D.grades.filter(function(g){return g.id_mapel!==id;});
-  syncServer(); rMapel(); toast('Mapel dihapus','s');
+  _pendingChanges = true; _syncVersion++;
+  syncServer(function(res){ toast(res&&res.success?'Mapel dihapus ✅':'Gagal hapus mapel!',res&&res.success?'s':'e'); }); rMapel();
 }
 // =====================================================================
 // NILAI FILTERS & TABLE
@@ -2099,6 +2125,7 @@ function saveNilai(e) {
   var obj={id_siswa:siswaId,id_mapel:mpId,kd:kds,nilai_ujian:(uj!=='')?Number(uj):null,semester:document.getElementById('nlSem').value,tahun_ajaran:document.getElementById('nlTahun').value};
   if(id){var idx=D.grades.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.grades[idx],obj);}
   else{D.grades.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
+  _pendingChanges = true; _syncVersion++;
   closeM('mNilai'); rNilai(); toast('Nilai disimpan — mengirim ke server...','i'); syncServer(function(res){ if(res&&res.success) toast('Nilai tersimpan di Google Sheets ✅','s'); else toast('Gagal simpan nilai ke server!','e'); });
 }
 
@@ -2192,6 +2219,7 @@ function saveBulk() {
     if(existing>=0){Object.assign(D.grades[existing],obj);}else{D.grades.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
     saved++;
   });
+  _pendingChanges = true; _syncVersion++;
   closeM('mBulk'); rNilai(); toast('Nilai '+saved+' siswa disimpan — mengirim ke server...','i'); syncServer(function(res){ if(res&&res.success) toast('Nilai tersimpan di Google Sheets ✅','s'); else toast('Gagal simpan ke server!','e'); });
 }
 
@@ -2257,8 +2285,9 @@ function saveTugas(e) {
   var obj={judul:document.getElementById('tgJudul').value.trim(),deskripsi:document.getElementById('tgDesk').value,id_mapel:document.getElementById('tgMapel').value,id_kelas:document.getElementById('tgKelas').value,deadline:document.getElementById('tgDl').value,created_by:ME.username};
   if(id){var idx=D.tasks.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.tasks[idx],obj);}
   else{D.tasks.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
+  _pendingChanges = true; _syncVersion++;
   closeM('mTugas');
-  rTugas(); // render segera agar guru melihat tugas baru
+  rTugas();
   toast('Tugas disimpan — mengirim ke server...', 'i');
   syncServer(function(res) {
     if (res && res.success) {
@@ -2272,7 +2301,8 @@ function delTugas(id) {
   if(!confirm('Hapus tugas ini?')) return;
   D.tasks=D.tasks.filter(function(t){return t.id!==id;});
   D.submissions=D.submissions.filter(function(s){return s.id_tugas!==id;});
-  syncServer(); rTugas(); toast('Tugas dihapus','s');
+  _pendingChanges = true; _syncVersion++;
+  syncServer(function(res){ toast(res&&res.success?'Tugas dihapus ✅':'Gagal hapus tugas!',res&&res.success?'s':'e'); }); rTugas();
 }
 
 // =====================================================================
@@ -2469,8 +2499,8 @@ function saveNilaiTugas(e) {
       }
     }
   }
-  _pendingChanges = true; // tandai ada perubahan sebelum syncServer
-  closeM('mNT'); syncServer(); rKumpul(); toast('Nilai tugas disimpan','s');
+  _pendingChanges = true; _syncVersion++;
+  closeM('mNT'); syncServer(function(res){ toast(res&&res.success?'Nilai tugas disimpan ✅':'Gagal simpan nilai tugas!',res&&res.success?'s':'e'); }); rKumpul();
 }
 
 // =====================================================================
@@ -2611,6 +2641,7 @@ function saveSet(e) {
   CFG.schoolName=document.getElementById('setSchool').value.trim()||'SMA Negeri Unggulan';
   var np=document.getElementById('setPass').value;
   if(np){ var adm=D.users.find(function(u){return u.id===ME.id;}); if(adm) adm.password=np; }
+  _pendingChanges = true; _syncVersion++;
   syncServer(); applyCFG(); toast('Pengaturan disimpan','s');
 }
 
@@ -2783,12 +2814,14 @@ function doKumpul(e) {
     if(!/^https?:\/\//i.test(url)){ toast('URL harus diawali dengan http:// atau https://','e'); return; }
     subObj.linkUrl=url; subObj.linkName=uname||url; subObj.fileName='[Link] '+(uname||url);
     if(existing>=0)Object.assign(D.submissions[existing],subObj); else D.submissions.push(subObj);
+    _pendingChanges = true; _syncVersion++;
     closeM('mKumpul'); syncServer(); renderStuTugas(); toast('Tugas dikumpulkan! (Link)','s'); return;
   }
   // MODE FILE
   var file=document.getElementById('kpFile').files[0];
   if(!file){
     if(existing>=0)Object.assign(D.submissions[existing],subObj); else D.submissions.push(subObj);
+    _pendingChanges = true; _syncVersion++;
     closeM('mKumpul'); syncServer(); renderStuTugas(); toast('Tugas dikumpulkan!','s'); return;
   }
   if(file.size > 1*1024*1024){ toast('File terlalu besar! Maksimal 1 MB','e'); return; }
@@ -2804,16 +2837,19 @@ function doKumpul(e) {
           btn.disabled=false; document.getElementById('kpUploadInfo').classList.add('hidden');
           if(res&&res.success){subObj.fileId=res.fileId;subObj.fileViewUrl=res.viewUrl;subObj.fileDlUrl=res.dlUrl;}
           if(existing>=0)Object.assign(D.submissions[existing],subObj); else D.submissions.push(subObj);
+          _pendingChanges = true; _syncVersion++;
           closeM('mKumpul'); syncServer(); renderStuTugas(); toast('Tugas dikumpulkan!','s');
         }, function(){
           btn.disabled=false; document.getElementById('kpUploadInfo').classList.add('hidden');
           if(existing>=0)Object.assign(D.submissions[existing],subObj); else D.submissions.push(subObj);
+          _pendingChanges = true; _syncVersion++;
           closeM('mKumpul'); syncServer(); renderStuTugas(); toast('Tugas dikumpulkan (file lokal)','i');
         }
       );
     } else {
       if(existing>=0)Object.assign(D.submissions[existing],subObj); else D.submissions.push(subObj);
       btn.disabled=false; document.getElementById('kpUploadInfo').classList.add('hidden');
+      _pendingChanges = true; _syncVersion++;
       closeM('mKumpul'); syncServer(); renderStuTugas(); toast('Tugas dikumpulkan!','s');
     }
   };
@@ -2912,18 +2948,23 @@ function confirmImport() {
   var added=0,updated=0;
   if(_impType==='siswa'){
     valid.forEach(function(r){ var kelas=r.nama_kelas?D.classes.find(function(c){return c.nama_kelas.toLowerCase()===r.nama_kelas.toLowerCase();}):null; var existing=D.users.findIndex(function(u){return u.username===r.username&&u.role==='siswa';}); var obj={nama_lengkap:r.nama_lengkap,username:r.username,password:r.password,role:'siswa',kelas_id:kelas?kelas.id:'',foto:''}; if(existing>=0){Object.assign(D.users[existing],obj);updated++;}else{D.users.push(Object.assign({id:genID(),created_at:nowTS()},obj));added++;} });
+    _pendingChanges = true; _syncVersion++;
     toast('Import siswa: '+added+' tambah, '+updated+' update','s'); closeM('mImport'); syncServer(); rSiswa();
   } else if(_impType==='guru'){
     valid.forEach(function(r){ var existing=D.users.findIndex(function(u){return u.username===r.username&&u.role==='guru';}); var obj={nama_lengkap:r.nama_lengkap,username:r.username,password:r.password,role:'guru',kelas_id:'',foto:''}; if(existing>=0){Object.assign(D.users[existing],obj);updated++;}else{D.users.push(Object.assign({id:genID(),created_at:nowTS()},obj));added++;} });
+    _pendingChanges = true; _syncVersion++;
     toast('Import guru: '+added+' tambah, '+updated+' update','s'); closeM('mImport'); syncServer(); rGuru();
   } else if(_impType==='kelas'){
     valid.forEach(function(r){ var existing=D.classes.findIndex(function(c){return c.nama_kelas.toLowerCase()===r.nama_kelas.toLowerCase();}); var obj={nama_kelas:r.nama_kelas,wali_kelas:r.wali_kelas}; if(existing>=0){Object.assign(D.classes[existing],obj);updated++;}else{D.classes.push(Object.assign({id:genID()},obj));added++;} });
+    _pendingChanges = true; _syncVersion++;
     toast('Import kelas: '+added+' tambah, '+updated+' update','s'); closeM('mImport'); syncServer(); rKelas();
   } else if(_impType==='mapel'){
     valid.forEach(function(r){ var existing=D.subjects.findIndex(function(s){return s.kode_mapel.toLowerCase()===r.kode_mapel.toLowerCase();}); var bkd=r.bobot_kd!==''&&r.bobot_kd!==undefined?Number(r.bobot_kd):null; var buj=r.bobot_ujian!==''&&r.bobot_ujian!==undefined?Number(r.bobot_ujian):null; var obj={kode_mapel:r.kode_mapel.toUpperCase(),nama_mapel:r.nama_mapel,bobotKD:bkd,bobotUjian:buj}; if(existing>=0){Object.assign(D.subjects[existing],obj);updated++;}else{D.subjects.push(Object.assign({id:genID()},obj));added++;} });
+    _pendingChanges = true; _syncVersion++;
     toast('Import mapel: '+added+' tambah, '+updated+' update','s'); closeM('mImport'); syncServer(); rMapel();
   } else if(_impType==='nilai'){
     valid.forEach(function(r){ var siswa=D.users.find(function(u){return u.username===r.username&&u.role==='siswa';}); var mapel=D.subjects.find(function(s){return s.kode_mapel.toLowerCase()===r.kode_mapel.toLowerCase();}); if(!siswa||!mapel)return; var sem=r.semester||'1'; var tahun=r.tahun_ajaran||'2025/2026'; var gi=D.grades.findIndex(function(g){return g.id_siswa===siswa.id&&g.id_mapel===mapel.id&&g.semester==sem&&g.tahun_ajaran===tahun;}); var gradeObj; if(gi>=0){gradeObj=D.grades[gi];}else{gradeObj={id:genID(),id_siswa:siswa.id,id_mapel:mapel.id,kd:[],nilai_ujian:null,semester:sem,tahun_ajaran:tahun,created_at:nowTS()};D.grades.push(gradeObj);gi=D.grades.length-1;} var kdi=gradeObj.kd.findIndex(function(k){return k.label===r.kd_label;}); if(kdi>=0){gradeObj.kd[kdi].entries.push({nilai:Number(r.nilai),note:'Import'});}else{gradeObj.kd.push({label:r.kd_label,entries:[{nilai:Number(r.nilai),note:'Import'}]});} if(r.nilai_ujian&&r.nilai_ujian!=='')gradeObj.nilai_ujian=Number(r.nilai_ujian); if(gi>=0)D.grades[gi]=gradeObj; added++; });
+    _pendingChanges = true; _syncVersion++;
     toast('Import nilai: '+added+' entri ditambahkan','s'); closeM('mImport'); syncServer(); rNilai();
   }
 }
@@ -3088,8 +3129,10 @@ function saveGuru(e) {
   else{D.users.push(Object.assign({id:targetId,created_at:nowTS()},obj));}
   closeM('mGuru');
   if(fotoVal) {
+    _pendingChanges = true; _syncVersion++;
     _saveFotoToServer(targetId, fotoVal, function(){ syncServer(); rGuru(); toast('Data guru disimpan','s'); });
   } else {
+    _pendingChanges = true; _syncVersion++;
     syncServer(); rGuru(); toast('Data guru disimpan','s');
   }
 }
@@ -3097,6 +3140,7 @@ function delGuru(id) {
   if(!confirm('Hapus guru ini? Penugasan mapelnya juga akan dihapus.')) return;
   D.users=D.users.filter(function(u){return u.id!==id;});
   D.teacherSubjects=D.teacherSubjects.filter(function(ts){return ts.id_guru!==id;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); rGuru(); toast('Guru dihapus','s');
 }
 
@@ -3223,6 +3267,7 @@ function saveAdmPassword() {
   document.getElementById('admOldPass').value='';
   document.getElementById('admNewPass').value='';
   document.getElementById('admConfPass').value='';
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Password admin berhasil diubah','s');
 }
 
@@ -3257,10 +3302,12 @@ function addAssignment() {
   var exists=D.teacherSubjects.find(function(ts){return ts.id_guru===_assignGuruId&&ts.id_mapel===mpId&&ts.id_kelas===klId;});
   if(exists){toast('Penugasan sudah ada','e');return;}
   D.teacherSubjects.push({id:genID(),id_guru:_assignGuruId,id_mapel:mpId,id_kelas:klId,extra_siswa:[],created_at:nowTS()});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderAssignList(); rGuru(); toast('Penugasan ditambahkan','s');
 }
 function removeAssignment(tsId) {
   D.teacherSubjects=D.teacherSubjects.filter(function(ts){return ts.id!==tsId;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderAssignList(); rGuru();
 }
 
@@ -3455,6 +3502,7 @@ function addSiswaToGuru(siswaId, tsId) {
   if(ex.find(function(e){return e.id_siswa===siswaId;})){toast('Sudah ditambahkan','i');return;}
   ex.push({id_siswa:siswaId,id_kelas:ts.id_kelas});
   ts.extra_siswa=ex;
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Siswa ditambahkan','s'); rGrSiswa();
 }
 
@@ -3548,6 +3596,7 @@ function saveJurnal(e) {
 function delJurnal(id) {
   if(!confirm('Hapus jurnal ini?')) return;
   D.journals=D.journals.filter(function(j){return j.id!==id;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); rJurnal(); rGrStats();
 }
 
@@ -3854,6 +3903,7 @@ function saveAbsen() {
     D.absences.push(newAbs);
     _curAbsenTS.existingId=newAbs.id;
   }
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Absensi disimpan','s');
   loadRekapBulanan(); // refresh rekap setelah simpan
 }
@@ -4340,6 +4390,7 @@ function setWaliKelas(kelasId, guruId) {
     var g = D.users.find(function(u){return u.id===guruId;});
     if(g) g.wali_kelas_id = kelasId;
   }
+  _pendingChanges = true; _syncVersion++;
   syncServer(); 
   renderWaliKelasList(); // Re-render untuk memastikan UI update
   
@@ -4389,6 +4440,7 @@ function tambahEkskul() {
   };
   D.ekskuls.push(newEkskul);
   document.getElementById('ekskulNamaBaru').value='';
+  _pendingChanges = true; _syncVersion++;
   syncServer(); 
   renderEkskulAdminList(); 
   toast('Ekskul "'+nm+'" berhasil ditambahkan dan disimpan','s');
@@ -4400,6 +4452,7 @@ function hapusEkskul(id) {
   D.ekskulMembers = (D.ekskulMembers||[]).filter(function(m){return m.ekskul_id!==id;});
   D.ekskulAbsences = (D.ekskulAbsences||[]).filter(function(a){return a.ekskul_id!==id;});
   D.ekskulGrades = (D.ekskulGrades||[]).filter(function(g){return g.ekskul_id!==id;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderEkskulAdminList(); toast('Ekskul dihapus','s');
 }
 
@@ -4408,6 +4461,7 @@ function setPembinaEkskul(ekskulId, guruId) {
   if(!ek){ toast('Ekskul tidak ditemukan','e'); return; }
   
   ek.pembina_id = guruId;
+  _pendingChanges = true; _syncVersion++;
   syncServer(); 
   renderEkskulAdminList(); // Re-render untuk memastikan UI update
   
@@ -4453,6 +4507,7 @@ function verifikasiDataEkskul() {
   alert(fullMsg);
   
   // Auto sync ke server
+  _pendingChanges = true; _syncVersion++;
   syncServer();
   toast('Verifikasi selesai. Data di-sync ke server.','s');
 }
@@ -4906,6 +4961,7 @@ function saveTabunganMassal() {
     }
   });
   if(saved>0){
+    _pendingChanges = true; _syncVersion++;
     syncServer(); renderTabunganInputList(); renderTabunganGuru(); updateSiswaConditionalNav(); 
     toast(saved+' transaksi disimpan','s');
   } else {
@@ -4923,6 +4979,7 @@ function saveTabunganTx() {
   if(!D.tabunganTx) D.tabunganTx=[];
   D.tabunganTx.push({id:genID(), id_siswa:siswaId, id_wali:ME.id, tipe:jenis, jumlah:jumlah, keterangan:ket, tanggal:tgl, created_at:nowTS()});
   document.getElementById('tabJumlah').value=''; document.getElementById('tabKet').value='';
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderTabunganGuru(); updateSiswaConditionalNav(); toast('Transaksi disimpan','s');
 }
 
@@ -4958,6 +5015,7 @@ function renderTabunganGuru() {
 function hapusTabunganTx(id) {
   if(!confirm('Hapus transaksi ini?')) return;
   D.tabunganTx = (D.tabunganTx||[]).filter(function(t){return t.id!==id;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderTabunganGuru(); toast('Transaksi dihapus','s');
 }
 
@@ -5054,12 +5112,14 @@ function saveAnggotaEkskul() {
   if(!chosen.length){ toast('Pilih minimal 1 siswa','e'); return; }
   if(!D.ekskulMembers) D.ekskulMembers=[];
   chosen.forEach(function(id){ D.ekskulMembers.push({id:genID(), ekskul_id:ekskulId, siswa_id:id}); });
+  _pendingChanges = true; _syncVersion++;
   closeM('mTambahAnggotaEkskul'); syncServer(); renderEkskulAnggota(); updateSiswaConditionalNav(); toast(chosen.length+' anggota ditambahkan','s');
 }
 
 function keluarkanAnggota(mId) {
   if(!confirm('Keluarkan anggota ini?')) return;
   D.ekskulMembers = (D.ekskulMembers||[]).filter(function(m){return m.id!==mId;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderEkskulAnggota(); toast('Anggota dikeluarkan','s');
 }
 
@@ -5108,6 +5168,7 @@ function saveEkskulAbsen() {
     var newA=Object.assign({id:genID(),created_at:nowTS()},obj);
     D.ekskulAbsences.push(newA); window._curEkskulAbsenId=newA.id;
   }
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Absensi ekskul disimpan','s');
 }
 
@@ -5138,6 +5199,7 @@ function saveEkskulNilai() {
     if(idx>=0){ D.ekskulGrades[idx].nilai=nilai; D.ekskulGrades[idx].ket=ket; }
     else { D.ekskulGrades.push({id:genID(),ekskul_id:ekskulId,siswa_id:m.siswa_id,nilai:nilai,ket:ket}); }
   });
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Nilai ekskul disimpan','s');
 }
 
@@ -5586,6 +5648,7 @@ function hapusUjian(id) {
   if(!confirm('Hapus ujian ini?')) return;
   D.exams=(D.exams||[]).filter(function(e){return e.id!==id;});
   D.examResults=(D.examResults||[]).filter(function(r){return r.id_exam!==id;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderUjianList(); toast('Ujian dihapus','s');
 }
 
@@ -5595,6 +5658,7 @@ function saveToBank() {
   _ujianSoalDraft.forEach(function(s){
     D.bankSoal.push(Object.assign({},s,{id:genID(),dibuat_by:ME.id}));
   });
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast(_ujianSoalDraft.length+' soal disimpan ke bank','s');
 }
 
@@ -5925,6 +5989,7 @@ function simpanPilihKeBank(examId) {
     D.bankSoal.push(Object.assign({},JSON.parse(JSON.stringify(s)),{id:genID(),dibuat_by:ME.id,created_at:nowTS()}));
     added++;
   });
+  _pendingChanges = true; _syncVersion++;
   syncServer();
   toast(added+' soal berhasil disimpan ke bank soal','s');
   // refresh bank tab
@@ -5999,6 +6064,7 @@ function eksekusiInputNilai(examId) {
     if(statusEl) statusEl.innerHTML='<span style="color:var(--sc)">✅ Dimasukkan</span>';
     count++;
   });
+  _pendingChanges = true; _syncVersion++;
   syncServer();
   toast(count+' siswa — nilai berhasil dimasukkan ke rapor!','s');
 }
@@ -6086,12 +6152,14 @@ function hitungNilaiAuto(exam, result) {
 
 function saveNilaiEssay(resultId, v) {
   var r=(D.examResults||[]).find(function(x){return x.id===resultId;}); if(!r) return;
+  _pendingChanges = true; _syncVersion++;
   r.nilai_essay=parseFloat(v)||0; syncServer();
 }
 
 function resetUjianSiswa(resultId, examId) {
   if(!confirm('Reset ujian siswa ini? Siswa bisa mengerjakan ulang.')) return;
   D.examResults=(D.examResults||[]).filter(function(r){return r.id!==resultId;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); toast('Ujian siswa direset','s');
   if(examId) lihatHasilUjian(examId); else renderUjianList();
 }
@@ -6102,6 +6170,7 @@ function resetSemuaUjian(examId) {
   if(!count){toast('Belum ada hasil ujian untuk direset','w');return;}
   if(!confirm('Reset SEMUA hasil ujian "'+exam.judul+'"?\n'+count+' data jawaban siswa akan dihapus. Siswa dapat mengerjakan ulang.')) return;
   D.examResults=(D.examResults||[]).filter(function(r){return r.id_exam!==examId;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderUjianList(); toast('Semua hasil ujian "'+exam.judul+'" berhasil direset','s');
 }
 
@@ -6248,12 +6317,14 @@ function saveBankSoal() {
   if(!D.bankSoal) D.bankSoal=[];
   if(id){var idx=D.bankSoal.findIndex(function(x){return x.id===id;});if(idx>=0)Object.assign(D.bankSoal[idx],obj);}
   else{D.bankSoal.push(Object.assign({id:genID(),created_at:nowTS()},obj));}
+  _pendingChanges = true; _syncVersion++;
   closeM('mTambahSoal'); syncServer(); renderBankSoalList(); toast('Soal disimpan','s');
 }
 
 function hapusBankSoal(id){
   if(!confirm('Hapus soal dari bank?')) return;
   D.bankSoal=(D.bankSoal||[]).filter(function(s){return s.id!==id;});
+  _pendingChanges = true; _syncVersion++;
   syncServer(); renderBankSoalList(); toast('Soal dihapus','s');
 }
 
@@ -6356,6 +6427,7 @@ function mulaiUjian(examId) {
     result={id:genID(),id_exam:examId,id_siswa:ME.id,answers:{},status:'berjalan',started_at:nowTS(),selesai_at:'',nilai_essay:'',soal_order:order,opsi_order:opsiOrder};
     if(!D.examResults) D.examResults=[];
     D.examResults.push(result);
+    _pendingChanges = true; _syncVersion++;
     syncServer();
   }
   window._curUjianId=examId; window._curResultId=result.id;
@@ -6623,6 +6695,7 @@ function selesaiUjian() {
   var r=(D.examResults||[]).find(function(x){return x.id===window._curResultId;});
   var exam=(D.exams||[]).find(function(e){return e.id===window._curUjianId;});
   if(r){r.status='selesai';r.selesai_at=nowTS();}
+  _pendingChanges = true; _syncVersion++;
   syncServer();
   document.getElementById('ujianOverlay').style.display='none';
   // Show skor siswa
@@ -6731,6 +6804,7 @@ window.debugSINMA = function() {
   console.log('EkskulAbsences:', (D.ekskulAbsences||[]).length);
   console.log('EkskulGrades:', (D.ekskulGrades||[]).length);
   console.log('========================');
+  _pendingChanges = true; _syncVersion++;
   console.log('💡 Untuk sync paksa ke server, jalankan: syncServer()');
   console.log('💡 Untuk reload data dari server, refresh halaman');
 };
